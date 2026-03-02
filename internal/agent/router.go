@@ -90,6 +90,18 @@ func (r *Router) Get(agentID string) (Agent, error) {
 	return nil, fmt.Errorf("agent not found: %s", agentID)
 }
 
+// GetCached returns an agent only if it's already in the cache (no lazy-load).
+// Used by handleList to check isRunning without triggering DB resolution.
+func (r *Router) GetCached(agentID string) (Agent, error) {
+	r.mu.RLock()
+	entry, ok := r.agents[agentID]
+	r.mu.RUnlock()
+	if ok && (r.ttl == 0 || time.Since(entry.cachedAt) < r.ttl) {
+		return entry.agent, nil
+	}
+	return nil, fmt.Errorf("agent not cached: %s", agentID)
+}
+
 // Remove removes an agent from the router.
 func (r *Router) Remove(agentID string) {
 	r.mu.Lock()

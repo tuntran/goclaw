@@ -92,6 +92,33 @@ func (m *AgentsMethods) handleAgentWait(_ context.Context, client *gateway.Clien
 }
 
 func (m *AgentsMethods) handleList(_ context.Context, client *gateway.Client, req *protocol.RequestFrame) {
+	// In managed mode, query DB for all accessible agents (router cache only
+	// contains lazy-loaded agents; newly created agents won't appear otherwise).
+	if m.isManaged && m.agentStore != nil {
+		ctx := context.Background()
+		agentDataList, err := m.agentStore.ListAccessible(ctx, client.UserID())
+		if err != nil {
+			client.SendResponse(protocol.NewErrorResponse(req.ID, protocol.ErrInternal, fmt.Sprintf("failed to list agents: %v", err)))
+			return
+		}
+		// Enrich with isRunning from router cache
+		infos := make([]agent.AgentInfo, 0, len(agentDataList))
+		for _, ag := range agentDataList {
+			info := agent.AgentInfo{
+				ID:    ag.AgentKey,
+				Model: ag.Model,
+			}
+			if loop, err := m.agents.GetCached(ag.AgentKey); err == nil {
+				info.IsRunning = loop.IsRunning()
+			}
+			infos = append(infos, info)
+		}
+		client.SendResponse(protocol.NewOKResponse(req.ID, map[string]interface{}{
+			"agents": infos,
+		}))
+		return
+	}
+	// Standalone mode: use router cache (all agents are pre-registered at startup)
 	infos := m.agents.ListInfo()
 	client.SendResponse(protocol.NewOKResponse(req.ID, map[string]interface{}{
 		"agents": infos,
