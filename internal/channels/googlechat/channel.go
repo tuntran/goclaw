@@ -2,11 +2,9 @@ package googlechat
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/http"
-	"os"
 	"strings"
 	"sync"
 
@@ -57,7 +55,7 @@ func New(cfg config.GoogleChatConfig, msgBus *bus.MessageBus, pairingSvc store.P
 		return nil, fmt.Errorf("google_chat api client: %w", err)
 	}
 
-	base := channels.NewBaseChannel("googlechat", msgBus, cfg.AllowFrom)
+	base := channels.NewBaseChannel(channels.TypeGoogleChat, msgBus, cfg.AllowFrom)
 	base.ValidatePolicy(cfg.DMPolicy, cfg.GroupPolicy)
 
 	historyLimit := cfg.HistoryLimit
@@ -191,22 +189,4 @@ func (c *Channel) removeReaction(ctx context.Context, chatID string) error {
 	return nil
 }
 
-// resolveServiceAccountJSON returns SA JSON bytes from inline content or file path.
-func resolveServiceAccountJSON(cfg config.GoogleChatConfig) ([]byte, error) {
-	if s := strings.TrimSpace(cfg.ServiceAccountJSON); s != "" {
-		data := []byte(s)
-		if !json.Valid(data) {
-			return nil, fmt.Errorf("service_account_json is not valid JSON")
-		}
-		return data, nil
-	}
-	if cfg.ServiceAccountFile != "" {
-		data, err := os.ReadFile(cfg.ServiceAccountFile)
-		if err != nil {
-			return nil, fmt.Errorf("read service account file: %w", err)
-		}
-		return data, nil
-	}
-	return nil, fmt.Errorf("service_account_json or service_account_file is required")
-}
 

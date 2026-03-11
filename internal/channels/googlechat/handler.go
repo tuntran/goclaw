@@ -15,6 +15,10 @@ import (
 // projectNumber: Google Cloud project number for OIDC verification (empty = skip verify).
 // onMessage: callback for MESSAGE events, invoked in a goroutine.
 func NewWebhookHandler(projectNumber string, onMessage func(event *SpaceEvent)) http.HandlerFunc {
+	if projectNumber == "" {
+		slog.Warn("googlechat: OIDC verification disabled — webhook endpoint is unauthenticated, set project_number to enable")
+	}
+
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
