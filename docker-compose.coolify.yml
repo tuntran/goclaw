@@ -1,0 +1,56 @@
+# Coolify deployment — backend + UI in a single app.
+# Database is managed as a separate Coolify resource.
+#
+# Required Coolify env vars:
+#   GOCLAW_POSTGRES_DSN, GOCLAW_GATEWAY_TOKEN, GOCLAW_ENCRYPTION_KEY
+
+services:
+  goclaw:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      - GOCLAW_HOST=0.0.0.0
+      - GOCLAW_PORT=18790
+      - GOCLAW_POSTGRES_DSN=${GOCLAW_POSTGRES_DSN}
+      - GOCLAW_GATEWAY_TOKEN=${GOCLAW_GATEWAY_TOKEN:-}
+      - GOCLAW_ENCRYPTION_KEY=${GOCLAW_ENCRYPTION_KEY:-}
+      - GOCLAW_DEEPSEEK_API_KEY=${GOCLAW_DEEPSEEK_API_KEY:-}
+    volumes:
+      - goclaw-data:/app/data
+      - goclaw-workspace:/app/workspace
+    networks:
+      - default
+      - coolify
+    restart: unless-stopped
+
+  goclaw-ui:
+    build:
+      context: ./ui/web
+      dockerfile: Dockerfile
+    expose:
+      - "80"
+    depends_on:
+      - goclaw
+    labels:
+      - traefik.enable=true
+      - "traefik.http.routers.goclaw-ui-https.rule=Host(`goclaw.tuntran.com`)"
+      - traefik.http.routers.goclaw-ui-https.entrypoints=https
+      - traefik.http.routers.goclaw-ui-https.tls=true
+      - traefik.http.routers.goclaw-ui-https.tls.certresolver=letsencrypt
+      - "traefik.http.routers.goclaw-ui-http.rule=Host(`goclaw.tuntran.com`)"
+      - traefik.http.routers.goclaw-ui-http.entrypoints=http
+      - traefik.http.routers.goclaw-ui-http.middlewares=redirect-to-https
+      - traefik.http.services.goclaw-ui.loadbalancer.server.port=80
+    networks:
+      - default
+      - coolify
+    restart: unless-stopped
+
+volumes:
+  goclaw-data:
+  goclaw-workspace:
+
+networks:
+  coolify:
+    external: true
