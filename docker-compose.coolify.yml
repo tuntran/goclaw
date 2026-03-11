@@ -16,6 +16,12 @@ services:
       - GOCLAW_GATEWAY_TOKEN=${GOCLAW_GATEWAY_TOKEN:-}
       - GOCLAW_ENCRYPTION_KEY=${GOCLAW_ENCRYPTION_KEY:-}
       - GOCLAW_DEEPSEEK_API_KEY=${GOCLAW_DEEPSEEK_API_KEY:-}
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:18790/health"]
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
     volumes:
       - goclaw-data:/app/data
       - goclaw-workspace:/app/workspace
@@ -31,7 +37,14 @@ services:
     expose:
       - "80"
     depends_on:
-      - goclaw
+      goclaw:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:80/"]
+      interval: 30s
+      timeout: 5s
+      start_period: 5s
+      retries: 3
     labels:
       - traefik.enable=true
       - "traefik.http.routers.goclaw-ui-https.rule=Host(`goclaw.tuntran.com`)"
@@ -42,6 +55,10 @@ services:
       - traefik.http.routers.goclaw-ui-http.entrypoints=http
       - traefik.http.routers.goclaw-ui-http.middlewares=redirect-to-https
       - traefik.http.services.goclaw-ui.loadbalancer.server.port=80
+      # Traefik healthcheck — auto-detect & re-route khi upstream bị mất
+      - traefik.http.services.goclaw-ui.loadbalancer.healthcheck.path=/
+      - traefik.http.services.goclaw-ui.loadbalancer.healthcheck.interval=15s
+      - traefik.http.services.goclaw-ui.loadbalancer.healthcheck.timeout=5s
     networks:
       - default
       - coolify
