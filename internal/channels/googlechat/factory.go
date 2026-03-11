@@ -63,6 +63,11 @@ func Factory(name string, creds json.RawMessage, cfg json.RawMessage,
 		BlockReply:         ic.BlockReply,
 	}
 
+	// DB instances default to "pairing" for groups (secure by default).
+	if gcCfg.GroupPolicy == "" {
+		gcCfg.GroupPolicy = "pairing"
+	}
+
 	ch, err := New(gcCfg, msgBus, pairingSvc)
 	if err != nil {
 		return nil, err
