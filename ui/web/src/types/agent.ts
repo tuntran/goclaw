@@ -7,6 +7,7 @@ export interface ToolPolicyConfig {
   allow?: string[];
   deny?: string[];
   alsoAllow?: string[];
+  byProvider?: Record<string, { profile?: string; allow?: string[]; deny?: string[]; alsoAllow?: string[] }>;
 }
 
 export interface SubagentsConfig {
@@ -74,6 +75,12 @@ export interface QualityGateConfig {
   block_on_failure: boolean;
   max_retries?: number;
   timeout_seconds?: number;
+}
+
+export interface WorkspaceSharingConfig {
+  shared_dm?: boolean;
+  shared_group?: boolean;
+  shared_users?: string[];
 }
 
 export interface AgentData {

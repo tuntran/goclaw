@@ -17,6 +17,7 @@ interface DistributionDonutProps {
   loading?: boolean;
   activeValue?: string;
   onSliceClick?: (dimension: string) => void;
+  metric?: "request_count" | "llm_call_count";
 }
 
 interface SliceEntry {
@@ -31,18 +32,19 @@ export function DistributionDonut({
   loading,
   activeValue,
   onSliceClick,
+  metric = "request_count",
 }: DistributionDonutProps) {
   const { t } = useTranslation("usage");
   const isEmpty = !loading && data.length === 0;
 
-  const sorted = [...data].sort((a, b) => b.request_count - a.request_count);
+  const sorted = [...data].sort((a, b) => b[metric] - a[metric]);
   const top = sorted.slice(0, MAX_SLICES);
   const rest = sorted.slice(MAX_SLICES);
 
-  const slices: SliceEntry[] = top.map((d) => ({ name: d.key, value: d.request_count, calls: d.request_count }));
+  const slices: SliceEntry[] = top.map((d) => ({ name: d.key, value: d[metric], calls: d[metric] }));
 
   if (rest.length > 0) {
-    const otherCount = rest.reduce((sum, d) => sum + d.request_count, 0);
+    const otherCount = rest.reduce((sum, d) => sum + d[metric], 0);
     slices.push({ name: t("analytics.distribution.other"), value: otherCount, calls: otherCount });
   }
 

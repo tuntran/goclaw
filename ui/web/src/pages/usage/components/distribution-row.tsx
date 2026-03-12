@@ -27,6 +27,7 @@ export function DistributionRow({
         loading={loading}
         activeValue={filters.provider}
         onSliceClick={(dim) => toggleFilter("provider", dim)}
+        metric="llm_call_count"
       />
       <DistributionDonut
         title={t("analytics.distribution.model")}
@@ -34,6 +35,7 @@ export function DistributionRow({
         loading={loading}
         activeValue={filters.model}
         onSliceClick={(dim) => toggleFilter("model", dim)}
+        metric="llm_call_count"
       />
       <DistributionDonut
         title={t("analytics.distribution.channel")}

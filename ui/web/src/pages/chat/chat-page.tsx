@@ -7,7 +7,7 @@ import { useIsMobile } from "@/hooks/use-media-query";
 import { cn } from "@/lib/utils";
 import { ChatSidebar } from "./chat-sidebar";
 import { ChatThread } from "./chat-thread";
-import { ChatInput } from "@/components/chat/chat-input";
+import { ChatInput, type AttachedFile } from "@/components/chat/chat-input";
 import { useChatSessions } from "./hooks/use-chat-sessions";
 import { useChatMessages } from "./hooks/use-chat-messages";
 import { useChatSend } from "./hooks/use-chat-send";
@@ -111,7 +111,7 @@ export function ChatPage() {
   );
 
   const handleSend = useCallback(
-    (message: string) => {
+    (message: string, files?: AttachedFile[]) => {
       let key = sessionKey;
       if (!key) {
         key = buildNewSessionKey();
@@ -119,7 +119,7 @@ export function ChatPage() {
         navigate(`/chat/${encodeURIComponent(key)}`);
       }
       // Pass key directly so send() doesn't use a stale closure value
-      send(message, key);
+      send(message, key, files);
       setScrollTrigger((n) => n + 1);
     },
     [sessionKey, send, buildNewSessionKey, navigate],

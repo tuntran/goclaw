@@ -12,6 +12,7 @@ import (
 	"github.com/nextlevelbuilder/goclaw/internal/config"
 	"github.com/nextlevelbuilder/goclaw/internal/media"
 	"github.com/nextlevelbuilder/goclaw/internal/providers"
+	"github.com/nextlevelbuilder/goclaw/internal/sandbox"
 	"github.com/nextlevelbuilder/goclaw/internal/skills"
 	"github.com/nextlevelbuilder/goclaw/internal/store"
 	"github.com/nextlevelbuilder/goclaw/internal/tools"
@@ -45,7 +46,14 @@ type Loop struct {
 	contextWindow int
 	maxIterations int
 	maxToolCalls  int
-	workspace     string
+	workspace        string
+	workspaceSharing *store.WorkspaceSharingConfig
+
+	// Per-agent overrides from DB (nil = use global defaults)
+	restrictToWs  *bool
+	subagentsCfg  *config.SubagentsConfig
+	memoryCfg     *config.MemoryConfig
+	sandboxCfg    *sandbox.Config
 
 	eventPub        bus.EventPublisher // currently unused by Loop; kept for future use
 	sessions        store.SessionStore
@@ -146,7 +154,15 @@ type LoopConfig struct {
 	ContextWindow   int
 	MaxIterations   int
 	MaxToolCalls    int
-	Workspace       string
+	Workspace        string
+	WorkspaceSharing *store.WorkspaceSharingConfig
+
+	// Per-agent DB overrides (nil = use global defaults)
+	RestrictToWs *bool
+	SubagentsCfg *config.SubagentsConfig
+	MemoryCfg    *config.MemoryConfig
+	SandboxCfg   *sandbox.Config
+
 	Bus             bus.EventPublisher
 	Sessions        store.SessionStore
 	Tools           *tools.Registry
@@ -248,6 +264,11 @@ func NewLoop(cfg LoopConfig) *Loop {
 		maxIterations:          cfg.MaxIterations,
 		maxToolCalls:           cfg.MaxToolCalls,
 		workspace:              cfg.Workspace,
+		workspaceSharing:       cfg.WorkspaceSharing,
+		restrictToWs:           cfg.RestrictToWs,
+		subagentsCfg:           cfg.SubagentsCfg,
+		memoryCfg:              cfg.MemoryCfg,
+		sandboxCfg:             cfg.SandboxCfg,
 		eventPub:               cfg.Bus,
 		sessions:               cfg.Sessions,
 		tools:                  cfg.Tools,
