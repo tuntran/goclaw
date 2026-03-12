@@ -1071,11 +1071,13 @@ func runGateway() {
 	// Compiled via build tags: `go build -tags tsnet` to enable.
 	mux := server.BuildMux()
 
-	// Mount channel webhook handlers on the main mux (e.g. Feishu /feishu/events).
-	// This allows webhook-based channels to share the main server port.
-	for _, route := range channelMgr.WebhookHandlers() {
-		mux.Handle(route.Path, route.Handler)
-		slog.Info("webhook route mounted on gateway", "path", route.Path)
+	// Mount channel webhook handlers dynamically (e.g. Feishu /feishu/events, Google Chat).
+	// Uses wrapper handlers so channels added later via Reload() are served without re-mounting.
+	channelMgr.MountNewWebhookRoutes(mux)
+
+	// Pass mux to instanceLoader so Reload() can mount webhook routes for new channels.
+	if instanceLoader != nil {
+		instanceLoader.SetMux(mux)
 	}
 
 	tsCleanup := initTailscale(ctx, cfg, mux)
