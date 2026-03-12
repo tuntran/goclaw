@@ -20,6 +20,14 @@ func NewWebhookHandler(projectNumber string, onMessage func(event *SpaceEvent)) 
 	}
 
 	return func(w http.ResponseWriter, r *http.Request) {
+		// Temporary: log all headers for debugging auth issues
+		slog.Info("googlechat: webhook request received",
+			"method", r.Method,
+			"has_auth", r.Header.Get("Authorization") != "",
+			"host", r.Host,
+			"x_forwarded_proto", r.Header.Get("X-Forwarded-Proto"),
+			"x_forwarded_host", r.Header.Get("X-Forwarded-Host"))
+
 		if r.Method != http.MethodPost {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
@@ -47,8 +55,10 @@ func NewWebhookHandler(projectNumber string, onMessage func(event *SpaceEvent)) 
 			return
 		}
 
-		// Return 200 immediately (Google retries on timeout)
+		// Return 200 with empty JSON (Google Chat requires a JSON response body)
+		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("{}"))
 
 		// Process asynchronously
 		switch event.Type {
