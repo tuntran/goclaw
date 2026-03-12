@@ -42,7 +42,7 @@ func Factory(name string, creds json.RawMessage, cfg json.RawMessage,
 	if c.ServiceAccountJSON == "" {
 		return nil, fmt.Errorf("googlechat service_account_json is required")
 	}
-	slog.Debug("googlechat factory: credentials parsed", "project_number", c.ProjectNumber, "sa_json_len", len(c.ServiceAccountJSON))
+	slog.Info("googlechat factory: credentials parsed", "project_number", c.ProjectNumber, "sa_json_len", len(c.ServiceAccountJSON))
 
 	var ic googlechatInstanceConfig
 	if len(cfg) > 0 {
