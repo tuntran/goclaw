@@ -51,11 +51,11 @@ func (c *Channel) handleMessageEvent(ctx context.Context, event *SpaceEvent) {
 	// 4. Policy check
 	dmPolicy := c.cfg.DMPolicy
 	if dmPolicy == "" {
-		dmPolicy = "open"
+		dmPolicy = "pairing"
 	}
 	groupPolicy := c.cfg.GroupPolicy
 	if groupPolicy == "" {
-		groupPolicy = "open"
+		groupPolicy = "pairing"
 	}
 
 	if !c.CheckPolicy(peerKind, dmPolicy, groupPolicy, senderID) {
@@ -126,10 +126,9 @@ func (c *Channel) handleMessageEvent(ctx context.Context, event *SpaceEvent) {
 func (c *Channel) isDuplicate(messageName string) bool {
 	_, loaded := c.dedup.LoadOrStore(messageName, struct{}{})
 	if !loaded {
-		go func() {
-			time.Sleep(5 * time.Minute)
+		time.AfterFunc(5*time.Minute, func() {
 			c.dedup.Delete(messageName)
-		}()
+		})
 	}
 	return loaded
 }

@@ -70,7 +70,10 @@ func (c *ChatClient) doJSON(ctx context.Context, method, url string, body interf
 	}
 	defer resp.Body.Close()
 
-	respBody, _ := io.ReadAll(resp.Body)
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("read response body: %w", err)
+	}
 	if resp.StatusCode >= 400 {
 		return nil, fmt.Errorf("google chat api %d: %s", resp.StatusCode, string(respBody))
 	}

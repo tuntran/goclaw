@@ -58,6 +58,13 @@ func New(cfg config.GoogleChatConfig, msgBus *bus.MessageBus, pairingSvc store.P
 	base := channels.NewBaseChannel(channels.TypeGoogleChat, msgBus, cfg.AllowFrom)
 	base.ValidatePolicy(cfg.DMPolicy, cfg.GroupPolicy)
 
+	switch cfg.ReactionLevel {
+	case "", "off", "minimal", "full":
+		// valid
+	default:
+		slog.Warn("googlechat: unrecognized reaction_level, defaulting to off", "value", cfg.ReactionLevel)
+	}
+
 	historyLimit := cfg.HistoryLimit
 	if historyLimit == 0 {
 		historyLimit = channels.DefaultGroupHistoryLimit
@@ -179,7 +186,10 @@ func (c *Channel) removeReaction(ctx context.Context, chatID string) error {
 	if !ok {
 		return nil
 	}
-	rs := val.(*reactionState)
+	rs, ok := val.(*reactionState)
+	if !ok {
+		return nil
+	}
 	if rs.reactionName == "" {
 		return nil
 	}
@@ -188,5 +198,3 @@ func (c *Channel) removeReaction(ctx context.Context, chatID string) error {
 	}
 	return nil
 }
-
-

@@ -100,7 +100,7 @@ func registerConfigChannels(cfg *config.Config, channelMgr *channels.Manager, ms
 	}
 
 	gcCfg := cfg.Channels.GoogleChat
-	if gcCfg.Enabled && (gcCfg.ServiceAccountFile != "" || gcCfg.ServiceAccountJSON != "") && instanceLoader == nil {
+	if gcCfg.Enabled && gcCfg.ServiceAccountJSON != "" && instanceLoader == nil {
 		gc, err := googlechatchannel.New(gcCfg, msgBus, pgStores.Pairing)
 		if err != nil {
 			slog.Error("failed to initialize googlechat channel", "error", err)

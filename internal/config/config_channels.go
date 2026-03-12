@@ -26,8 +26,7 @@ type ChannelsConfig struct {
 
 type GoogleChatConfig struct {
 	Enabled            bool                `json:"enabled"`
-	ServiceAccountFile string              `json:"service_account_file,omitempty"` // path to SA JSON file (backward compat)
-	ServiceAccountJSON string              `json:"service_account_json,omitempty"` // inline SA JSON content (preferred)
+	ServiceAccountJSON string              `json:"service_account_json,omitempty"` // inline SA JSON content
 	ProjectNumber      string              `json:"project_number"`                // for OIDC verification
 	WebhookPath        string              `json:"webhook_path,omitempty"`       // default "/googlechat/events"
 	AllowFrom          FlexibleStringSlice `json:"allow_from"`
