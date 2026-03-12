@@ -3,7 +3,6 @@ package googlechat
 import (
 	"encoding/json"
 	"fmt"
-	"log/slog"
 
 	"github.com/nextlevelbuilder/goclaw/internal/bus"
 	"github.com/nextlevelbuilder/goclaw/internal/channels"
@@ -42,7 +41,6 @@ func Factory(name string, creds json.RawMessage, cfg json.RawMessage,
 	if c.ServiceAccountJSON == "" {
 		return nil, fmt.Errorf("googlechat service_account_json is required")
 	}
-	slog.Info("googlechat factory: credentials parsed", "project_number", c.ProjectNumber, "sa_json_len", len(c.ServiceAccountJSON))
 
 	var ic googlechatInstanceConfig
 	if len(cfg) > 0 {

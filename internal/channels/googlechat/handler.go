@@ -70,6 +70,9 @@ func NewWebhookHandler(projectNumber string, onMessage func(event *SpaceEvent)) 
 }
 
 // verifyOIDC validates the Google OIDC token from the Authorization header.
+// Google Chat sets the JWT audience to the webhook URL (not project number),
+// so we reconstruct the full URL from the request to use as expected audience.
+// The projectNumber is used as fallback if URL-based verification fails.
 func verifyOIDC(r *http.Request, projectNumber string) error {
 	auth := r.Header.Get("Authorization")
 	if auth == "" {
@@ -80,19 +83,39 @@ func verifyOIDC(r *http.Request, projectNumber string) error {
 		return fmt.Errorf("invalid Authorization format")
 	}
 
-	// idtoken.Validate caches keys internally
-	payload, err := idtoken.Validate(r.Context(), token, projectNumber)
-	if err != nil {
-		// Log expected vs actual audience for debugging
-		if payload != nil {
-			slog.Warn("googlechat OIDC: audience mismatch detail", "expected", projectNumber, "actual_aud", payload.Audience)
-		}
-		// Try without audience check to extract the actual aud claim
-		if p2, err2 := idtoken.Validate(r.Context(), token, ""); err2 == nil && p2 != nil {
-			slog.Warn("googlechat OIDC: JWT actual audience", "aud", p2.Audience, "issuer", p2.Issuer)
+	// Google Chat JWT aud = full webhook URL (e.g. https://host/googlechat/events).
+	// Reconstruct from request headers (X-Forwarded-* set by reverse proxy).
+	audience := buildRequestURL(r)
+	if audience != "" {
+		if _, err := idtoken.Validate(r.Context(), token, audience); err == nil {
+			return nil
 		}
 	}
+
+	// Fallback: try project number as audience (older Google Chat behavior).
+	_, err := idtoken.Validate(r.Context(), token, projectNumber)
 	return err
+}
+
+// buildRequestURL reconstructs the original full URL from request headers.
+// Returns empty string if scheme/host cannot be determined.
+func buildRequestURL(r *http.Request) string {
+	scheme := r.Header.Get("X-Forwarded-Proto")
+	if scheme == "" {
+		if r.TLS != nil {
+			scheme = "https"
+		} else {
+			scheme = "http"
+		}
+	}
+	host := r.Header.Get("X-Forwarded-Host")
+	if host == "" {
+		host = r.Host
+	}
+	if host == "" {
+		return ""
+	}
+	return scheme + "://" + host + r.URL.Path
 }
 
 // isBotMentioned checks if the bot was @mentioned in the message annotations.
