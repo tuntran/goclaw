@@ -7,8 +7,6 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
-
-	"google.golang.org/api/idtoken"
 )
 
 // NewWebhookHandler creates an http.HandlerFunc for Google Chat webhook events.
@@ -25,11 +23,13 @@ func NewWebhookHandler(projectNumber string, onMessage func(event *SpaceEvent)) 
 			return
 		}
 
-		// OIDC verification
+		// OIDC verification using Google Chat's specific JWK endpoint
 		if projectNumber != "" {
 			if err := verifyOIDC(r, projectNumber); err != nil {
 				slog.Warn("googlechat: OIDC verification failed", "error", err)
-				http.Error(w, "unauthorized", http.StatusUnauthorized)
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusUnauthorized)
+				w.Write([]byte(`{}`))
 				return
 			}
 		}
@@ -70,6 +70,8 @@ func NewWebhookHandler(projectNumber string, onMessage func(event *SpaceEvent)) 
 }
 
 // verifyOIDC validates the Google OIDC token from the Authorization header.
+// Uses Google Chat's specific JWK endpoint (chat@system.gserviceaccount.com)
+// instead of the generic OAuth2 certs endpoint, which doesn't include Chat signing keys.
 func verifyOIDC(r *http.Request, projectNumber string) error {
 	auth := r.Header.Get("Authorization")
 	if auth == "" {
@@ -80,9 +82,35 @@ func verifyOIDC(r *http.Request, projectNumber string) error {
 		return fmt.Errorf("invalid Authorization format")
 	}
 
-	// idtoken.Validate caches keys internally
-	_, err := idtoken.Validate(r.Context(), token, projectNumber)
-	return err
+	// Build list of acceptable audiences: webhook URL + project number
+	var audiences []string
+	if url := buildRequestURL(r); url != "" {
+		audiences = append(audiences, url)
+	}
+	audiences = append(audiences, projectNumber)
+
+	return verifyChatToken(r.Context(), token, audiences)
+}
+
+// buildRequestURL reconstructs the original full URL from request headers.
+// Returns empty string if scheme/host cannot be determined.
+func buildRequestURL(r *http.Request) string {
+	scheme := r.Header.Get("X-Forwarded-Proto")
+	if scheme == "" {
+		if r.TLS != nil {
+			scheme = "https"
+		} else {
+			scheme = "http"
+		}
+	}
+	host := r.Header.Get("X-Forwarded-Host")
+	if host == "" {
+		host = r.Host
+	}
+	if host == "" {
+		return ""
+	}
+	return scheme + "://" + host + r.URL.Path
 }
 
 // isBotMentioned checks if the bot was @mentioned in the message annotations.
