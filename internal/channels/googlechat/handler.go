@@ -81,7 +81,17 @@ func verifyOIDC(r *http.Request, projectNumber string) error {
 	}
 
 	// idtoken.Validate caches keys internally
-	_, err := idtoken.Validate(r.Context(), token, projectNumber)
+	payload, err := idtoken.Validate(r.Context(), token, projectNumber)
+	if err != nil {
+		// Log expected vs actual audience for debugging
+		if payload != nil {
+			slog.Warn("googlechat OIDC: audience mismatch detail", "expected", projectNumber, "actual_aud", payload.Audience)
+		}
+		// Try without audience check to extract the actual aud claim
+		if p2, err2 := idtoken.Validate(r.Context(), token, ""); err2 == nil && p2 != nil {
+			slog.Warn("googlechat OIDC: JWT actual audience", "aud", p2.Audience, "issuer", p2.Issuer)
+		}
+	}
 	return err
 }
 
