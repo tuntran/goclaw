@@ -7,8 +7,6 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
-
-	"google.golang.org/api/idtoken"
 )
 
 // NewWebhookHandler creates an http.HandlerFunc for Google Chat webhook events.
@@ -33,11 +31,13 @@ func NewWebhookHandler(projectNumber string, onMessage func(event *SpaceEvent)) 
 			return
 		}
 
-		// OIDC verification
+		// OIDC verification using Google Chat's specific JWK endpoint
 		if projectNumber != "" {
 			if err := verifyOIDC(r, projectNumber); err != nil {
 				slog.Warn("googlechat: OIDC verification failed", "error", err)
-				http.Error(w, "unauthorized", http.StatusUnauthorized)
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusUnauthorized)
+				w.Write([]byte(`{}`))
 				return
 			}
 		}
@@ -80,9 +80,8 @@ func NewWebhookHandler(projectNumber string, onMessage func(event *SpaceEvent)) 
 }
 
 // verifyOIDC validates the Google OIDC token from the Authorization header.
-// Google Chat sets the JWT audience to the webhook URL (not project number),
-// so we reconstruct the full URL from the request to use as expected audience.
-// The projectNumber is used as fallback if URL-based verification fails.
+// Uses Google Chat's specific JWK endpoint (chat@system.gserviceaccount.com)
+// instead of the generic OAuth2 certs endpoint, which doesn't include Chat signing keys.
 func verifyOIDC(r *http.Request, projectNumber string) error {
 	auth := r.Header.Get("Authorization")
 	if auth == "" {
@@ -93,18 +92,14 @@ func verifyOIDC(r *http.Request, projectNumber string) error {
 		return fmt.Errorf("invalid Authorization format")
 	}
 
-	// Google Chat JWT aud = full webhook URL (e.g. https://host/googlechat/events).
-	// Reconstruct from request headers (X-Forwarded-* set by reverse proxy).
-	audience := buildRequestURL(r)
-	if audience != "" {
-		if _, err := idtoken.Validate(r.Context(), token, audience); err == nil {
-			return nil
-		}
+	// Build list of acceptable audiences: webhook URL + project number
+	var audiences []string
+	if url := buildRequestURL(r); url != "" {
+		audiences = append(audiences, url)
 	}
+	audiences = append(audiences, projectNumber)
 
-	// Fallback: try project number as audience (older Google Chat behavior).
-	_, err := idtoken.Validate(r.Context(), token, projectNumber)
-	return err
+	return verifyChatToken(r.Context(), token, audiences)
 }
 
 // buildRequestURL reconstructs the original full URL from request headers.
