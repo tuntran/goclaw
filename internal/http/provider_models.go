@@ -41,7 +41,13 @@ func (h *ProvidersHandler) handleListProviderModels(w http.ResponseWriter, r *ht
 
 	// Claude CLI doesn't need an API key — return hardcoded models
 	if p.ProviderType == store.ProviderClaudeCLI {
-		writeJSON(w, http.StatusOK, map[string]interface{}{"models": claudeCLIModels()})
+		writeJSON(w, http.StatusOK, map[string]any{"models": claudeCLIModels()})
+		return
+	}
+
+	// ACP agents don't need an API key — return hardcoded models
+	if p.ProviderType == store.ProviderACP {
+		writeJSON(w, http.StatusOK, map[string]any{"models": acpModels()})
 		return
 	}
 
@@ -80,11 +86,11 @@ func (h *ProvidersHandler) handleListProviderModels(w http.ResponseWriter, r *ht
 	if err != nil {
 		slog.Warn("providers.models", "provider", p.Name, "error", err)
 		// Return empty list instead of error — provider may not support /models
-		writeJSON(w, http.StatusOK, map[string]interface{}{"models": []ModelInfo{}})
+		writeJSON(w, http.StatusOK, map[string]any{"models": []ModelInfo{}})
 		return
 	}
 
-	writeJSON(w, http.StatusOK, map[string]interface{}{"models": models})
+	writeJSON(w, http.StatusOK, map[string]any{"models": models})
 }
 
 // fetchAnthropicModels calls the Anthropic models API.
@@ -209,7 +215,10 @@ func minimaxModels() []ModelInfo {
 // DashScope does not expose a standard /v1/models endpoint.
 func dashScopeModels() []ModelInfo {
 	return []ModelInfo{
-		// Chat / text
+		// Qwen3.5 series — Text Generation + Deep Thinking + Visual Understanding
+		{ID: "qwen3.5-plus", Name: "Qwen 3.5 Plus"},
+		{ID: "qwen3.5-turbo", Name: "Qwen 3.5 Turbo"},
+		// Qwen3 hosted series — Text + Thinking
 		{ID: "qwen3-max", Name: "Qwen 3 Max"},
 		{ID: "qwen3-plus", Name: "Qwen 3 Plus"},
 		{ID: "qwen3-turbo", Name: "Qwen 3 Turbo"},
@@ -236,6 +245,15 @@ func claudeCLIModels() []ModelInfo {
 		{ID: "sonnet", Name: "Sonnet"},
 		{ID: "opus", Name: "Opus"},
 		{ID: "haiku", Name: "Haiku"},
+	}
+}
+
+// acpModels returns the model aliases for ACP-compatible coding agents.
+func acpModels() []ModelInfo {
+	return []ModelInfo{
+		{ID: "claude", Name: "Claude"},
+		{ID: "codex", Name: "Codex"},
+		{ID: "gemini", Name: "Gemini"},
 	}
 }
 
@@ -274,4 +292,3 @@ func fetchOpenAIModels(ctx context.Context, apiBase, apiKey string) ([]ModelInfo
 	}
 	return models, nil
 }
-

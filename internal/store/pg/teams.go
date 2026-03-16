@@ -69,7 +69,8 @@ func (s *PGTeamStore) DeleteTeam(ctx context.Context, teamID uuid.UUID) error {
 func (s *PGTeamStore) ListTeams(ctx context.Context) ([]store.TeamData, error) {
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT t.id, t.name, t.lead_agent_id, t.description, t.status, t.settings, t.created_by, t.created_at, t.updated_at,
-		 COALESCE(a.agent_key, '') AS lead_agent_key
+		 COALESCE(a.agent_key, '') AS lead_agent_key,
+		 COALESCE(a.display_name, '') AS lead_display_name
 		 FROM agent_teams t
 		 LEFT JOIN agents a ON a.id = t.lead_agent_id
 		 ORDER BY t.created_at`)
@@ -79,22 +80,60 @@ func (s *PGTeamStore) ListTeams(ctx context.Context) ([]store.TeamData, error) {
 	defer rows.Close()
 
 	var teams []store.TeamData
+	teamIndex := map[uuid.UUID]int{} // map team ID → index in teams slice
 	for rows.Next() {
 		var d store.TeamData
 		var desc sql.NullString
 		if err := rows.Scan(
 			&d.ID, &d.Name, &d.LeadAgentID, &desc, &d.Status,
 			&d.Settings, &d.CreatedBy, &d.CreatedAt, &d.UpdatedAt,
-			&d.LeadAgentKey,
+			&d.LeadAgentKey, &d.LeadDisplayName,
 		); err != nil {
 			return nil, err
 		}
 		if desc.Valid {
 			d.Description = desc.String
 		}
+		teamIndex[d.ID] = len(teams)
 		teams = append(teams, d)
 	}
-	return teams, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	// Bulk-fetch all members for returned teams
+	if len(teams) > 0 {
+		mRows, err := s.db.QueryContext(ctx,
+			`SELECT m.team_id, m.agent_id, m.role, m.joined_at,
+			 COALESCE(a.agent_key, '') AS agent_key,
+			 COALESCE(a.display_name, '') AS display_name,
+			 COALESCE(a.frontmatter, '') AS frontmatter,
+			 COALESCE(a.other_config->>'emoji', '') AS emoji
+			 FROM agent_team_members m
+			 JOIN agents a ON a.id = m.agent_id
+			 WHERE a.status = 'active'
+			 ORDER BY m.joined_at`)
+		if err != nil {
+			return nil, err
+		}
+		defer mRows.Close()
+
+		for mRows.Next() {
+			var m store.TeamMemberData
+			if err := mRows.Scan(&m.TeamID, &m.AgentID, &m.Role, &m.JoinedAt, &m.AgentKey, &m.DisplayName, &m.Frontmatter, &m.Emoji); err != nil {
+				return nil, err
+			}
+			if idx, ok := teamIndex[m.TeamID]; ok {
+				teams[idx].Members = append(teams[idx].Members, m)
+				teams[idx].MemberCount++
+			}
+		}
+		if err := mRows.Err(); err != nil {
+			return nil, err
+		}
+	}
+
+	return teams, nil
 }
 
 // ============================================================
@@ -124,7 +163,8 @@ func (s *PGTeamStore) ListMembers(ctx context.Context, teamID uuid.UUID) ([]stor
 		`SELECT m.team_id, m.agent_id, m.role, m.joined_at,
 		 COALESCE(a.agent_key, '') AS agent_key,
 		 COALESCE(a.display_name, '') AS display_name,
-		 COALESCE(a.frontmatter, '') AS frontmatter
+		 COALESCE(a.frontmatter, '') AS frontmatter,
+		 COALESCE(a.other_config->>'emoji', '') AS emoji
 		 FROM agent_team_members m
 		 JOIN agents a ON a.id = m.agent_id
 		 WHERE m.team_id = $1 AND a.status = 'active'
@@ -139,7 +179,41 @@ func (s *PGTeamStore) ListMembers(ctx context.Context, teamID uuid.UUID) ([]stor
 		var d store.TeamMemberData
 		if err := rows.Scan(
 			&d.TeamID, &d.AgentID, &d.Role, &d.JoinedAt,
-			&d.AgentKey, &d.DisplayName, &d.Frontmatter,
+			&d.AgentKey, &d.DisplayName, &d.Frontmatter, &d.Emoji,
+		); err != nil {
+			return nil, err
+		}
+		members = append(members, d)
+	}
+	return members, rows.Err()
+}
+
+func (s *PGTeamStore) ListIdleMembers(ctx context.Context, teamID uuid.UUID) ([]store.TeamMemberData, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT m.team_id, m.agent_id, m.role, m.joined_at,
+		 COALESCE(a.agent_key, '') AS agent_key,
+		 COALESCE(a.display_name, '') AS display_name,
+		 COALESCE(a.frontmatter, '') AS frontmatter,
+		 COALESCE(a.other_config->>'emoji', '') AS emoji
+		 FROM agent_team_members m
+		 JOIN agents a ON a.id = m.agent_id
+		 WHERE m.team_id = $1 AND a.status = 'active' AND m.role != $2
+		   AND NOT EXISTS (
+		     SELECT 1 FROM team_tasks t
+		     WHERE t.owner_agent_id = m.agent_id AND t.team_id = $1 AND t.status = $3
+		   )
+		 ORDER BY m.joined_at`, teamID, store.TeamRoleLead, store.TeamTaskStatusInProgress)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var members []store.TeamMemberData
+	for rows.Next() {
+		var d store.TeamMemberData
+		if err := rows.Scan(
+			&d.TeamID, &d.AgentID, &d.Role, &d.JoinedAt,
+			&d.AgentKey, &d.DisplayName, &d.Frontmatter, &d.Emoji,
 		); err != nil {
 			return nil, err
 		}
@@ -152,8 +226,11 @@ func (s *PGTeamStore) GetTeamForAgent(ctx context.Context, agentID uuid.UUID) (*
 	row := s.db.QueryRowContext(ctx,
 		`SELECT t.id, t.name, t.lead_agent_id, t.description, t.status, t.settings, t.created_by, t.created_at, t.updated_at
 		 FROM agent_teams t
-		 JOIN agent_team_members m ON m.team_id = t.id
-		 WHERE m.agent_id = $1 AND t.status = $2
+		 WHERE (
+		   t.lead_agent_id = $1
+		   OR EXISTS (SELECT 1 FROM agent_team_members m WHERE m.team_id = t.id AND m.agent_id = $1)
+		 ) AND t.status = $2
+		 ORDER BY (t.lead_agent_id = $1) DESC
 		 LIMIT 1`, agentID, store.TeamStatusActive)
 
 	d, err := scanTeamRow(row)
@@ -200,32 +277,42 @@ func (s *PGTeamStore) SetHandoffRoute(ctx context.Context, route *store.HandoffR
 	}
 	route.CreatedAt = time.Now()
 
+	var teamID *uuid.UUID
+	if route.TeamID != uuid.Nil {
+		teamID = &route.TeamID
+	}
+
 	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO handoff_routes (id, channel, chat_id, from_agent_key, to_agent_key, reason, created_by, created_at)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+		`INSERT INTO handoff_routes (id, channel, chat_id, from_agent_key, to_agent_key, reason, created_by, created_at, team_id)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 		 ON CONFLICT (channel, chat_id)
 		 DO UPDATE SET to_agent_key = EXCLUDED.to_agent_key, from_agent_key = EXCLUDED.from_agent_key,
-		               reason = EXCLUDED.reason, created_by = EXCLUDED.created_by, created_at = EXCLUDED.created_at`,
+		               reason = EXCLUDED.reason, created_by = EXCLUDED.created_by, created_at = EXCLUDED.created_at,
+		               team_id = EXCLUDED.team_id`,
 		route.ID, route.Channel, route.ChatID, route.FromAgentKey, route.ToAgentKey,
-		route.Reason, route.CreatedBy, route.CreatedAt,
+		route.Reason, route.CreatedBy, route.CreatedAt, teamID,
 	)
 	return err
 }
 
 func (s *PGTeamStore) GetHandoffRoute(ctx context.Context, channel, chatID string) (*store.HandoffRouteData, error) {
 	var d store.HandoffRouteData
+	var teamID *uuid.UUID
 	err := s.db.QueryRowContext(ctx,
-		`SELECT id, channel, chat_id, from_agent_key, to_agent_key, reason, created_by, created_at
+		`SELECT id, channel, chat_id, from_agent_key, to_agent_key, reason, created_by, created_at, team_id
 		 FROM handoff_routes WHERE channel = $1 AND chat_id = $2`,
 		channel, chatID).Scan(
 		&d.ID, &d.Channel, &d.ChatID, &d.FromAgentKey, &d.ToAgentKey,
-		&d.Reason, &d.CreatedBy, &d.CreatedAt,
+		&d.Reason, &d.CreatedBy, &d.CreatedAt, &teamID,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, err
+	}
+	if teamID != nil {
+		d.TeamID = *teamID
 	}
 	return &d, nil
 }

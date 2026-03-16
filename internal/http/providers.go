@@ -13,18 +13,19 @@ import (
 	"github.com/nextlevelbuilder/goclaw/internal/oauth"
 	"github.com/nextlevelbuilder/goclaw/internal/providers"
 	"github.com/nextlevelbuilder/goclaw/internal/store"
+	"github.com/nextlevelbuilder/goclaw/pkg/protocol"
 )
 
 // ProvidersHandler handles LLM provider CRUD endpoints.
 type ProvidersHandler struct {
-	store          store.ProviderStore
-	secretStore    store.ConfigSecretsStore
-	token          string
-	providerReg    *providers.Registry
-	gatewayAddr    string                    // for injecting MCP bridge into Claude CLI providers
-	mcpLookup      providers.MCPServerLookup // optional: resolves per-agent MCP servers
-	cliMu          sync.Mutex                // serializes Claude CLI provider create to prevent duplicates
-	msgBus         *bus.MessageBus
+	store       store.ProviderStore
+	secretStore store.ConfigSecretsStore
+	token       string
+	providerReg *providers.Registry
+	gatewayAddr string                    // for injecting MCP bridge into Claude CLI providers
+	mcpLookup   providers.MCPServerLookup // optional: resolves per-agent MCP servers
+	cliMu       sync.Mutex                // serializes Claude CLI provider create to prevent duplicates
+	msgBus      *bus.MessageBus
 }
 
 // NewProvidersHandler creates a handler for provider management endpoints.
@@ -42,6 +43,18 @@ func (h *ProvidersHandler) SetMessageBus(msgBus *bus.MessageBus) {
 // Must be called before serving requests (not thread-safe).
 func (h *ProvidersHandler) SetMCPServerLookup(lookup providers.MCPServerLookup) {
 	h.mcpLookup = lookup
+}
+
+// emitProviderCacheInvalidate broadcasts a provider cache invalidation event.
+// Subscribers (e.g. ACP re-registration in gateway_managed.go) react to reload from DB.
+func (h *ProvidersHandler) emitProviderCacheInvalidate(name string) {
+	if h.msgBus == nil {
+		return
+	}
+	h.msgBus.Broadcast(bus.Event{
+		Name:    protocol.EventCacheInvalidate,
+		Payload: bus.CacheInvalidatePayload{Kind: bus.CacheKindProvider, Key: name},
+	})
 }
 
 // RegisterRoutes registers all provider management routes on the given mux.
@@ -64,16 +77,7 @@ func (h *ProvidersHandler) RegisterRoutes(mux *http.ServeMux) {
 }
 
 func (h *ProvidersHandler) auth(next http.HandlerFunc) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		if h.token != "" {
-			if extractBearerToken(r) != h.token {
-				locale := extractLocale(r)
-				writeJSON(w, http.StatusUnauthorized, map[string]string{"error": i18n.T(locale, i18n.MsgUnauthorized)})
-				return
-			}
-		}
-		next(w, r)
-	}
+	return requireAuth(h.token, "", next)
 }
 
 // maskAPIKey replaces non-empty API keys with "***".
@@ -87,6 +91,11 @@ func maskAPIKey(p *store.LLMProviderData) {
 // so it's immediately usable for verify/chat without a gateway restart.
 func (h *ProvidersHandler) registerInMemory(p *store.LLMProviderData) {
 	if h.providerReg == nil || !p.Enabled {
+		return
+	}
+	// ACP agents don't need an API key — skip in-memory registration
+	// (ACP providers are registered via gateway_providers.go on startup or restart)
+	if p.ProviderType == store.ProviderACP {
 		return
 	}
 	// Claude CLI doesn't need an API key — register immediately
@@ -147,7 +156,7 @@ func (h *ProvidersHandler) handleListProviders(w http.ResponseWriter, r *http.Re
 		maskAPIKey(&providers[i])
 	}
 
-	writeJSON(w, http.StatusOK, map[string]interface{}{"providers": providers})
+	writeJSON(w, http.StatusOK, map[string]any{"providers": providers})
 }
 
 func (h *ProvidersHandler) handleCreateProvider(w http.ResponseWriter, r *http.Request) {
@@ -196,6 +205,7 @@ func (h *ProvidersHandler) handleCreateProvider(w http.ResponseWriter, r *http.R
 
 	// Register in-memory so verify/chat work without restart
 	h.registerInMemory(&p)
+	h.emitProviderCacheInvalidate(p.Name)
 
 	emitAudit(h.msgBus, r, "provider.created", "provider", p.ID.String())
 	maskAPIKey(&p)
@@ -228,7 +238,7 @@ func (h *ProvidersHandler) handleUpdateProvider(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	var updates map[string]interface{}
+	var updates map[string]any
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&updates); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": i18n.T(locale, i18n.MsgInvalidJSON)})
 		return
@@ -293,6 +303,14 @@ func (h *ProvidersHandler) handleUpdateProvider(w http.ResponseWriter, r *http.R
 		}
 	}
 
+	// Notify subscribers (e.g. ACP re-registration) about the change
+	if updated, err := h.store.GetProvider(r.Context(), id); err == nil {
+		h.emitProviderCacheInvalidate(updated.Name)
+		if oldName != "" && oldName != updated.Name {
+			h.emitProviderCacheInvalidate(oldName)
+		}
+	}
+
 	emitAudit(h.msgBus, r, "provider.updated", "provider", id.String())
 	writeJSON(w, http.StatusOK, map[string]string{"status": "updated"})
 }
@@ -319,6 +337,9 @@ func (h *ProvidersHandler) handleDeleteProvider(w http.ResponseWriter, r *http.R
 
 	if h.providerReg != nil && providerName != "" {
 		h.providerReg.Unregister(providerName)
+	}
+	if providerName != "" {
+		h.emitProviderCacheInvalidate(providerName)
 	}
 
 	emitAudit(h.msgBus, r, "provider.deleted", "provider", id.String())

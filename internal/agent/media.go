@@ -55,13 +55,14 @@ func loadImages(files []bus.MediaFile) []providers.ImageContent {
 // If mediaStore is nil, falls back to legacy behavior (no persistence, delete temp files).
 func (l *Loop) persistMedia(sessionKey string, files []bus.MediaFile) []providers.MediaRef {
 	if l.mediaStore == nil {
-		// Fallback: no persistent storage configured — delete temp files after loading.
-		slog.Warn("media: no media store configured, temp files will be deleted", "agent", l.id)
-		defer func() {
-			for _, f := range files {
-				_ = os.Remove(f.Path)
-			}
-		}()
+		// Fallback: no persistent storage configured.
+		// slog.Warn("media: no media store configured, temp files will be deleted", "agent", l.id)
+		// Keep workspace files — don't delete originals.
+		// defer func() {
+		// 	for _, f := range files {
+		// 		_ = os.Remove(f.Path)
+		// 	}
+		// }()
 		return nil
 	}
 
@@ -82,17 +83,18 @@ func (l *Loop) persistMedia(sessionKey string, files []bus.MediaFile) []provider
 			} else {
 				srcPath = sanitized
 				mime = "image/jpeg" // sanitized output is always JPEG
-				// Clean up original if sanitized to a different file.
-				if sanitized != f.Path {
-					_ = os.Remove(f.Path)
-				}
+				// Keep workspace files — don't delete originals after sanitization.
+				// if sanitized != f.Path {
+				// 	_ = os.Remove(f.Path)
+				// }
 			}
 		}
 
 		id, _, err := l.mediaStore.SaveFile(sessionKey, srcPath, mime)
 		if err != nil {
 			slog.Warn("media: failed to persist file", "path", f.Path, "error", err)
-			_ = os.Remove(srcPath)
+			// Keep workspace files — don't delete on persist failure.
+			// _ = os.Remove(srcPath)
 			continue
 		}
 
@@ -238,6 +240,45 @@ func (l *Loop) enrichVideoIDs(messages []providers.Message, refs []providers.Med
 		bare := "<media:video>"
 		if idx := strings.LastIndex(content, bare); idx >= 0 {
 			content = content[:idx] + "<media:video" + idAttr + ">" + content[idx+len(bare):]
+			continue
+		}
+	}
+	messages[lastIdx].Content = content
+}
+
+// enrichImageIDs updates the last user message to embed persisted media IDs
+// in <media:image> tags so the LLM knows images were received and stored.
+// Without this, the LLM sees plain <media:image> and cannot confirm image availability.
+// Iterates refs in reverse order so that when multiple images are present,
+// each ref maps to the correct positional tag (last ref → last tag, etc.).
+func (l *Loop) enrichImageIDs(messages []providers.Message, refs []providers.MediaRef) {
+	if len(messages) == 0 {
+		return
+	}
+	lastIdx := -1
+	for i := len(messages) - 1; i >= 0; i-- {
+		if messages[i].Role == "user" {
+			lastIdx = i
+			break
+		}
+	}
+	if lastIdx < 0 {
+		return
+	}
+
+	content := messages[lastIdx].Content
+	// Iterate in reverse so first ref matches first tag when using LastIndex replacements.
+	for i := len(refs) - 1; i >= 0; i-- {
+		ref := refs[i]
+		if ref.Kind != "image" {
+			continue
+		}
+		idAttr := fmt.Sprintf(" id=%q", ref.ID)
+
+		// Replace the LAST bare <media:image> with <media:image id="uuid">
+		bare := "<media:image>"
+		if idx := strings.LastIndex(content, bare); idx >= 0 {
+			content = content[:idx] + "<media:image" + idAttr + ">" + content[idx+len(bare):]
 			continue
 		}
 	}

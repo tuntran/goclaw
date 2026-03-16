@@ -7,6 +7,9 @@
   "emptyDescription": "Tạo agent đầu tiên để bắt đầu.",
   "noMatchTitle": "Không tìm thấy agent phù hợp",
   "noMatchDescription": "Thử từ khóa tìm kiếm khác.",
+  "viewCard": "Dạng thẻ",
+  "viewList": "Dạng danh sách",
+  "allCreators": "Tất cả người tạo",
   "presets": {
     "foxSpirit": {
       "label": "🐱 Tiểu Hồ",
@@ -43,6 +46,8 @@
   },
   "create": {
     "title": "Tạo agent",
+    "emoji": "Biểu tượng",
+    "emojiHint": "Emoji tùy chọn",
     "displayName": "Tên hiển thị *",
     "displayNamePlaceholder": "Agent của tôi",
     "agentKey": "Khóa agent *",
@@ -117,7 +122,9 @@
     "active": "Hoạt động",
     "inactive": "Không hoạt động",
     "summonFailed": "Triệu hồi thất bại",
-    "defaultAgent": "Agent mặc định"
+    "defaultAgent": "Agent mặc định",
+    "emoji": "Biểu tượng",
+    "emojiHint": "Emoji tùy chọn"
   },
   "llmConfig": {
     "title": "Cấu hình LLM",
@@ -165,7 +172,8 @@
     "perUser": "theo người dùng",
     "emptyFile": "trống",
     "estTokens": "Ước {{tokens}} token",
-    "insertContact": "Tìm liên hệ để chèn..."
+    "insertContact": "Tìm liên hệ để chèn...",
+    "contentPlaceholder": "Nội dung tệp..."
   },
   "fileEditor": {
     "editWithAi": "Chỉnh sửa với AI",
@@ -187,10 +195,14 @@
     "user": "Người dùng",
     "revokeTitle": "Thu hồi chia sẻ",
     "revokeDesc": "Thu hồi quyền truy cập của người dùng \"{{userId}}\"? Họ sẽ không thể sử dụng agent này nữa.",
-    "revoke": "Thu hồi"
+    "revoke": "Thu hồi",
+    "role.user": "Người dùng",
+    "role.viewer": "Người xem",
+    "roleDesc.user": "Có thể sử dụng agent và trò chuyện",
+    "roleDesc.viewer": "Chỉ đọc"
   },
   "links": {
-    "teamsHint": "Để cộng tác đa agent với theo dõi nhiệm vụ và kiểm soát chất lượng, hãy cân nhắc sử dụng Nhóm agent thay thế. Liên kết agent phù hợp nhất cho ủy quyền đơn giản 1-1 giữa hai agent.",
+    "teamsHint": "Agent Links sẽ sớm bị gỡ bỏ. Vui lòng sử dụng Agent Teams để cộng tác đa agent — hỗ trợ quản lý nhiệm vụ, workspace chung và kiểm soát chất lượng trong một hệ thống đơn giản hơn.",
     "createLink": "Tạo liên kết",
     "targetAgent": "Agent đích",
     "selectAgent": "Chọn hoặc tìm kiếm agent...",
@@ -256,7 +268,10 @@
     "continue": "Tiếp tục",
     "retry": "Thử lại",
     "retrying": "Đang thử lại...",
-    "done": "xong"
+    "done": "xong",
+    "fileLabelSOUL": "Linh hồn & Tính cách",
+    "fileLabelIDENTITY": "Thẻ danh tính",
+    "fileLabelUSER_PREDEFINED": "Ngữ cảnh người dùng mặc định"
   },
   "configGroups": {
     "core": "Cốt lõi",
@@ -389,5 +404,14 @@
       "formatJson": "Định dạng JSON",
       "invalidJson": "Cú pháp JSON không hợp lệ"
     }
+  },
+  "toast": {
+    "created": "Đã tạo agent",
+    "createFailed": "Không thể tạo agent",
+    "updated": "Đã cập nhật agent",
+    "updateFailed": "Không thể cập nhật agent",
+    "deleted": "Đã xóa agent",
+    "deleteFailed": "Không thể xóa agent",
+    "unknownError": "Lỗi không xác định"
   }
 }

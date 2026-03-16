@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/nextlevelbuilder/goclaw/internal/sandbox"
+	"github.com/nextlevelbuilder/goclaw/internal/store"
 )
 
 // Dangerous command patterns to deny by default.
@@ -20,7 +21,8 @@ import (
 // read-only rootfs, no-new-privileges, pids-limit, memory limit).
 // Sources: OWASP Agentic AI Top 10, Claude Code CVE-2025-66032, MITRE ATT&CK,
 // PayloadsAllTheThings, Trail of Bits prompt-injection-to-RCE research.
-var defaultDenyPatterns = []*regexp.Regexp{
+// DefaultDenyPatterns contains dangerous command patterns to deny by default.
+var DefaultDenyPatterns = []*regexp.Regexp{
 	// ── Destructive file operations ──
 	regexp.MustCompile(`\brm\s+-[rf]{1,2}\b`),
 	regexp.MustCompile(`\brm\s+.*--recursive`),
@@ -138,6 +140,7 @@ type ExecTool struct {
 	sandboxMgr     sandbox.Manager      // nil = no sandbox, execute on host
 	approvalMgr    *ExecApprovalManager // nil = no approval needed
 	agentID        string               // for approval request context
+	secureCLIStore store.SecureCLIStore  // nil = no credentialed exec
 }
 
 // NewExecTool creates an exec tool that runs commands directly on the host.
@@ -145,7 +148,7 @@ func NewExecTool(workingDir string, restrict bool) *ExecTool {
 	return &ExecTool{
 		workingDir:   workingDir,
 		timeout:      60 * time.Second,
-		denyPatterns: defaultDenyPatterns,
+		denyPatterns: DefaultDenyPatterns,
 		restrict:     restrict,
 	}
 }
@@ -155,7 +158,7 @@ func NewSandboxedExecTool(workingDir string, restrict bool, mgr sandbox.Manager)
 	return &ExecTool{
 		workingDir:   workingDir,
 		timeout:      300 * time.Second, // sandbox allows longer timeout
-		denyPatterns: defaultDenyPatterns,
+		denyPatterns: DefaultDenyPatterns,
 		restrict:     restrict,
 		sandboxMgr:   mgr,
 	}
@@ -186,6 +189,12 @@ func (t *ExecTool) SetApprovalManager(mgr *ExecApprovalManager, agentID string) 
 	t.agentID = agentID
 }
 
+// SetSecureCLIStore sets the credential store for credentialed exec.
+// When set, commands matching a configured binary use Direct Exec Mode.
+func (t *ExecTool) SetSecureCLIStore(s store.SecureCLIStore) {
+	t.secureCLIStore = s
+}
+
 func (t *ExecTool) Name() string        { return "exec" }
 func (t *ExecTool) Description() string { return "Execute a shell command and return its output" }
 func (t *ExecTool) Parameters() map[string]any {
@@ -198,7 +207,7 @@ func (t *ExecTool) Parameters() map[string]any {
 			},
 			"working_dir": map[string]any{
 				"type":        "string",
-				"description": "Optional working directory for the command",
+				"description": "Working directory for the command (default: workspace root)",
 			},
 		},
 		"required": []string{"command"},
@@ -226,6 +235,26 @@ func (t *ExecTool) Execute(ctx context.Context, args map[string]any) *Result {
 				return ErrorResult(fmt.Sprintf("command denied by safety policy: matches pattern %s", pattern.String()))
 			}
 		}
+	}
+
+	// Credentialed exec: if command matches a configured binary, use Direct Exec Mode.
+	// This bypasses approval (admin trust) and shell (security).
+	if cred, binary, cmdArgs := t.lookupCredentialedBinary(ctx, command); cred != nil {
+		cwd := ToolWorkspaceFromCtx(ctx)
+		if cwd == "" {
+			cwd = t.workingDir
+		}
+		if wd, _ := args["working_dir"].(string); wd != "" {
+			if effectiveRestrict(ctx, t.restrict) {
+				if resolved, err := resolvePath(wd, t.workingDir, true); err == nil {
+					cwd = resolved
+				}
+			} else {
+				cwd = wd
+			}
+		}
+		sandboxKey := ToolSandboxKeyFromCtx(ctx)
+		return t.executeCredentialed(ctx, cred, binary, cmdArgs, cwd, sandboxKey)
 	}
 
 	// Exec approval check (matching TS exec-approval.ts pipeline)
@@ -337,7 +366,7 @@ func (t *ExecTool) executeInSandbox(ctx context.Context, command, cwd, sandboxKe
 		}
 	}
 
-	result, err := sb.Exec(ctx, []string{"sh", "-c", command}, containerCwd)
+	result, err := sb.Exec(ctx, []string{"sh", "-c", command}, containerCwd) //nolint: no ExecOption for normal exec
 	if err != nil {
 		return ErrorResult(fmt.Sprintf("sandbox exec: %v", err))
 	}
