@@ -12,6 +12,7 @@ import (
 	"github.com/nextlevelbuilder/goclaw/internal/agent"
 	"github.com/nextlevelbuilder/goclaw/internal/bus"
 	"github.com/nextlevelbuilder/goclaw/internal/channels"
+	"github.com/nextlevelbuilder/goclaw/internal/channels/telegram/voiceguard"
 	"github.com/nextlevelbuilder/goclaw/internal/config"
 	"github.com/nextlevelbuilder/goclaw/internal/i18n"
 	"github.com/nextlevelbuilder/goclaw/internal/scheduler"
@@ -41,15 +42,6 @@ func processNormalMessage(
 	agentID := msg.AgentID
 	if agentID == "" {
 		agentID = resolveAgentRoute(cfg, msg.Channel, msg.ChatID, msg.PeerKind)
-	}
-
-	// Check handoff routing override
-	if teamStore != nil && msg.AgentID == "" {
-		if route, _ := teamStore.GetHandoffRoute(ctx, msg.Channel, msg.ChatID); route != nil {
-			agentID = route.ToAgentKey
-			slog.Info("inbound: handoff route active",
-				"channel", msg.Channel, "chat", msg.ChatID, "to", agentID)
-		}
 	}
 
 	agentLoop, err := agents.Get(agentID)
@@ -151,7 +143,7 @@ func processNormalMessage(
 
 	// Auto-clear followup reminders when user sends a message on a real channel.
 	// Fire-and-forget: don't block message processing.
-	if teamStore != nil && msg.Channel != tools.ChannelSystem && msg.Channel != tools.ChannelDelegate && msg.Channel != tools.ChannelDashboard {
+	if teamStore != nil && msg.Channel != tools.ChannelSystem && msg.Channel != tools.ChannelTeammate && msg.Channel != tools.ChannelDashboard {
 		go func(ch, cid string) {
 			if n, err := teamStore.ClearFollowupByScope(ctx, ch, cid); err != nil {
 				slog.Warn("auto-clear followup failed", "channel", ch, "chat_id", cid, "error", err)
@@ -330,7 +322,7 @@ func processNormalMessage(
 	})
 
 	// Handle result asynchronously to not block the flush callback.
-	go func(agentKey, channel, chatID, session, rID string, meta map[string]string, blockReplyEnabled bool, ptd *tools.PendingTeamDispatch) {
+	go func(agentKey, channel, chatID, session, rID, peerKind, inboundContent string, meta map[string]string, blockReplyEnabled bool, ptd *tools.PendingTeamDispatch) {
 		outcome := <-outCh
 
 		// Release team create lock — tasks already visible in DB, other goroutines can list.
@@ -405,11 +397,20 @@ func processNormalMessage(
 			return
 		}
 
+		// Sanitize voice agent replies: replace technical errors with user-friendly fallback.
+		replyContent := voiceguard.SanitizeReply(
+			cfg.Channels.Telegram.VoiceAgentID, agentKey,
+			channel, peerKind, inboundContent, outcome.Result.Content,
+			cfg.Channels.Telegram.AudioGuardFallbackTranscript,
+			cfg.Channels.Telegram.AudioGuardFallbackNoTranscript,
+			cfg.Channels.Telegram.AudioGuardErrorMarkers,
+		)
+
 		// Publish response back to the channel
 		outMsg := bus.OutboundMessage{
 			Channel:  channel,
 			ChatID:   chatID,
-			Content:  outcome.Result.Content,
+			Content:  replyContent,
 			Metadata: meta,
 		}
 
@@ -418,8 +419,8 @@ func processNormalMessage(
 		msgBus.PublishOutbound(outMsg)
 
 		// Auto-set followup when lead agent replies on a real channel with in_progress tasks.
-		if teamStore != nil && channel != tools.ChannelSystem && channel != tools.ChannelDelegate && channel != tools.ChannelDashboard {
-			go autoSetFollowup(ctx, teamStore, agentStore, agentKey, channel, chatID, outcome.Result.Content)
+		if teamStore != nil && channel != tools.ChannelSystem && channel != tools.ChannelTeammate && channel != tools.ChannelDashboard {
+			go autoSetFollowup(ctx, teamStore, agentStore, agentKey, channel, chatID, replyContent)
 		}
-	}(agentID, msg.Channel, msg.ChatID, sessionKey, runID, outMeta, blockReply, ptd)
+	}(agentID, msg.Channel, msg.ChatID, sessionKey, runID, peerKind, msg.Content, outMeta, blockReply, ptd)
 }

@@ -30,7 +30,7 @@ import (
 // registerConfigChannels registers config-based channels as fallback when no DB instances are loaded.
 func registerConfigChannels(cfg *config.Config, channelMgr *channels.Manager, msgBus *bus.MessageBus, pgStores *store.Stores, instanceLoader *channels.InstanceLoader) {
 	if cfg.Channels.Telegram.Enabled && cfg.Channels.Telegram.Token != "" && instanceLoader == nil {
-		tg, err := telegram.New(cfg.Channels.Telegram, msgBus, pgStores.Pairing, nil, nil, nil)
+		tg, err := telegram.New(cfg.Channels.Telegram, msgBus, pgStores.Pairing, nil, nil, nil, nil)
 		if err != nil {
 			slog.Error("failed to initialize telegram channel", "error", err)
 		} else {
@@ -162,6 +162,11 @@ func wireChannelEventSubscribers(
 	// Wire pairing approval notification → channel (matching TS notifyPairingApproved).
 	botName := cfg.ResolveDisplayName("default")
 	pairingMethods.SetOnApprove(func(ctx context.Context, channel, chatID, senderID string) {
+		// Browser/internal channels use WebSocket — UI polls approval status directly.
+		if channels.IsInternalChannel(channel) {
+			slog.Debug("pairing approved for internal channel, skipping notification", "channel", channel)
+			return
+		}
 		msg := fmt.Sprintf("✅ %s access approved. Send a message to start chatting.", botName)
 		// Group pairings need group_id metadata so channels (e.g. Zalo) route to group API.
 		if strings.HasPrefix(senderID, "group:") {

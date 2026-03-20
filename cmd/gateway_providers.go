@@ -87,7 +87,7 @@ func registerProviders(registry *providers.Registry, cfg *config.Config) {
 	}
 
 	if cfg.Providers.DashScope.APIKey != "" {
-		registry.Register(providers.NewDashScopeProvider(cfg.Providers.DashScope.APIKey, cfg.Providers.DashScope.APIBase, "qwen3-max"))
+		registry.Register(providers.NewDashScopeProvider("dashscope", cfg.Providers.DashScope.APIKey, cfg.Providers.DashScope.APIBase, "qwen3-max"))
 		slog.Info("registered provider", "name", "dashscope")
 	}
 
@@ -231,7 +231,8 @@ func jsonToStringMap(data json.RawMessage) map[string]string {
 // DB providers are registered after config providers, so they take precedence (overwrite).
 // gatewayAddr is used to inject GoClaw MCP bridge for Claude CLI providers.
 // mcpStore is optional; when provided, per-agent MCP servers are injected into CLI config.
-func registerProvidersFromDB(registry *providers.Registry, provStore store.ProviderStore, secretStore store.ConfigSecretsStore, gatewayAddr, gatewayToken string, mcpStore store.MCPServerStore) {
+// cfg provides fallback api_base values from config/env when DB providers have none set.
+func registerProvidersFromDB(registry *providers.Registry, provStore store.ProviderStore, secretStore store.ConfigSecretsStore, gatewayAddr, gatewayToken string, mcpStore store.MCPServerStore, cfg *config.Config) {
 	ctx := context.Background()
 	dbProviders, err := provStore.ListProviders(ctx)
 	if err != nil {
@@ -287,6 +288,13 @@ func registerProvidersFromDB(registry *providers.Registry, provStore store.Provi
 		if p.APIKey == "" {
 			continue
 		}
+		// Fall back to config/env api_base when DB provider has none set.
+		if p.APIBase == "" && cfg != nil {
+			if base := cfg.Providers.APIBaseForType(p.ProviderType); base != "" {
+				p.APIBase = base
+				slog.Info("provider api_base inherited from config", "name", p.Name, "api_base", base)
+			}
+		}
 		switch p.ProviderType {
 		case store.ProviderChatGPTOAuth:
 			ts := oauth.NewDBTokenSource(provStore, secretStore, p.Name)
@@ -295,7 +303,7 @@ func registerProvidersFromDB(registry *providers.Registry, provStore store.Provi
 			registry.Register(providers.NewAnthropicProvider(p.APIKey,
 				providers.WithAnthropicBaseURL(p.APIBase)))
 		case store.ProviderDashScope:
-			registry.Register(providers.NewDashScopeProvider(p.APIKey, p.APIBase, ""))
+			registry.Register(providers.NewDashScopeProvider(p.Name, p.APIKey, p.APIBase, ""))
 		case store.ProviderBailian:
 			base := p.APIBase
 			if base == "" {
@@ -366,7 +374,7 @@ func registerACPFromConfig(registry *providers.Registry, cfg config.ACPConfig) {
 		opts = append(opts, providers.WithACPPermMode(cfg.PermMode))
 	}
 	registry.Register(providers.NewACPProvider(
-		cfg.Binary, cfg.Args, workDir, idleTTL, tools.DefaultDenyPatterns, opts...,
+		cfg.Binary, cfg.Args, workDir, idleTTL, tools.DefaultDenyPatterns(), opts...,
 	))
 	slog.Info("registered provider", "name", "acp", "binary", cfg.Binary)
 }
@@ -409,7 +417,7 @@ func registerACPFromDB(registry *providers.Registry, p store.LLMProviderData) {
 		workDir = defaultACPWorkDir()
 	}
 	registry.Register(providers.NewACPProvider(
-		binary, settings.Args, workDir, idleTTL, tools.DefaultDenyPatterns,
+		binary, settings.Args, workDir, idleTTL, tools.DefaultDenyPatterns(),
 		providers.WithACPModel(p.Name),
 	))
 	slog.Info("registered provider from DB", "name", p.Name, "type", "acp")

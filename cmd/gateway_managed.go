@@ -49,18 +49,12 @@ func wireExtras(
 	redisClient any, // nil when built without -tags redis or when Redis is unconfigured
 ) (*tools.ContextFileInterceptor, *mcpbridge.Pool, *media.Store, tools.PostTurnProcessor) {
 	// 1. Build cache instances (in-memory or Redis depending on build tags)
-	agentCtxCache, userCtxCache, gwCache := makeCaches(redisClient)
+	agentCtxCache, userCtxCache := makeCaches(redisClient)
 
 	// 1a. Context file interceptor (created before resolver so callbacks can reference it)
 	var contextFileInterceptor *tools.ContextFileInterceptor
 	if stores.Agents != nil {
 		contextFileInterceptor = tools.NewContextFileInterceptor(stores.Agents, workspace, agentCtxCache, userCtxCache)
-	}
-
-	// 1b. Group writer cache (wraps ListGroupFileWriters with TTL cache)
-	var groupWriterCache *store.GroupWriterCache
-	if stores.Agents != nil {
-		groupWriterCache = store.NewGroupWriterCache(stores.Agents, gwCache)
 	}
 
 	// 1c. Persistent media storage for cross-turn image/document access
@@ -96,7 +90,7 @@ func wireExtras(
 	// 2. User seeding callback: seeds per-user context files on first chat
 	var ensureUserFiles agent.EnsureUserFilesFunc
 	if stores.Agents != nil {
-		ensureUserFiles = buildEnsureUserFiles(stores.Agents, msgBus)
+		ensureUserFiles = buildEnsureUserFiles(stores.Agents, stores.ConfigPermissions)
 	}
 
 	// 3. Context file loader callback: loads per-user context files dynamically
@@ -154,11 +148,12 @@ func wireExtras(
 		DynamicLoader:          dynamicLoader,
 		AgentLinkStore:         stores.AgentLinks,
 		TeamStore:              stores.Teams,
+		DataDir:                workspace,
 		SecureCLIStore:         stores.SecureCLI,
 		BuiltinToolStore:       stores.BuiltinTools,
 		MCPStore:               stores.MCP,
 		MCPPool:                mcpPool,
-		GroupWriterCache:       groupWriterCache,
+		ConfigPermStore:        stores.ConfigPermissions,
 		MediaStore:             mediaStore,
 		ModelPricing:           appCfg.Telemetry.ModelPricing,
 		TracingStore:           stores.Tracing,
@@ -221,17 +216,17 @@ func wireExtras(
 		}
 	}
 
-	// Wire group writer cache for permission checks
-	if groupWriterCache != nil {
+	// Wire config perm store for file writer permission checks
+	if stores.ConfigPermissions != nil {
 		for _, toolName := range []string{"read_file", "write_file", "edit", "cron"} {
 			if t, ok := toolsReg.Get(toolName); ok {
-				if gwa, ok := t.(tools.GroupWriterAware); ok {
-					gwa.SetGroupWriterCache(groupWriterCache)
+				if cpa, ok := t.(tools.ConfigPermAware); ok {
+					cpa.SetConfigPermStore(stores.ConfigPermissions)
 				}
 			}
 		}
 		if contextFileInterceptor != nil {
-			contextFileInterceptor.SetGroupWriterCache(groupWriterCache)
+			contextFileInterceptor.SetConfigPermStore(stores.ConfigPermissions)
 		}
 	}
 
@@ -357,6 +352,34 @@ func wireExtras(
 		})
 	}
 
+	// Heartbeat cache: invalidate due cache on config changes
+	if hi, ok := stores.Heartbeats.(store.CacheInvalidatable); ok {
+		msgBus.Subscribe(bus.TopicCacheHeartbeat, func(event bus.Event) {
+			if event.Name != protocol.EventCacheInvalidate {
+				return
+			}
+			payload, ok := event.Payload.(bus.CacheInvalidatePayload)
+			if !ok || payload.Kind != bus.CacheKindHeartbeat {
+				return
+			}
+			hi.InvalidateCache()
+		})
+	}
+
+	// Config permissions cache: invalidate on grant/revoke changes
+	if pi, ok := stores.ConfigPermissions.(store.CacheInvalidatable); ok {
+		msgBus.Subscribe(bus.TopicCacheConfigPerms, func(event bus.Event) {
+			if event.Name != protocol.EventCacheInvalidate {
+				return
+			}
+			payload, ok := event.Payload.(bus.CacheInvalidatePayload)
+			if !ok || payload.Kind != bus.CacheKindConfigPerms {
+				return
+			}
+			pi.InvalidateCache()
+		})
+	}
+
 	// Custom tools cache: reload global tools on create/update/delete
 	if dynamicLoader != nil {
 		msgBus.Subscribe(bus.TopicCacheCustomTools, func(event bus.Event) {
@@ -395,9 +418,15 @@ func wireExtras(
 		postTurn = teamMgr
 		toolsReg.Register(tools.NewTeamTasksTool(teamMgr))
 		toolsReg.Register(tools.NewTeamMessageTool(teamMgr))
-		toolsReg.Register(tools.NewWorkspaceWriteTool(teamMgr, workspace))
-		toolsReg.Register(tools.NewWorkspaceReadTool(teamMgr, workspace))
-		slog.Info("team + workspace tools registered", "workspace", workspace)
+		// Wire workspace interceptor into write_file so team workspace validation
+		// and event broadcasting happen transparently via existing file tools.
+		wsInterceptor := tools.NewWorkspaceInterceptor(teamMgr)
+		if writeTool, ok := toolsReg.Get("write_file"); ok {
+			if wia, ok := writeTool.(tools.WorkspaceInterceptorAware); ok {
+				wia.SetWorkspaceInterceptor(wsInterceptor)
+			}
+		}
+		slog.Info("team tools registered", "workspace", workspace)
 
 		// Team cache invalidation via pub/sub
 		msgBus.Subscribe(bus.TopicCacheTeam, func(event bus.Event) {
@@ -439,24 +468,6 @@ func wireExtras(
 			agentRouter.InvalidateUserWorkspace(payload.Key)
 		}
 	})
-
-	// Group writer cache: invalidate on writer list changes
-	if groupWriterCache != nil {
-		msgBus.Subscribe(bus.TopicCacheGroupFileWriters, func(event bus.Event) {
-			if event.Name != protocol.EventCacheInvalidate {
-				return
-			}
-			payload, ok := event.Payload.(bus.CacheInvalidatePayload)
-			if !ok || payload.Kind != bus.CacheKindGroupFileWriters {
-				return
-			}
-			if payload.Key != "" {
-				groupWriterCache.Invalidate(payload.Key)
-			} else {
-				groupWriterCache.InvalidateAll()
-			}
-		})
-	}
 
 	// Provider cache: re-register ACP providers on create/update/delete
 	msgBus.Subscribe(bus.TopicCacheProvider, func(event bus.Event) {

@@ -48,6 +48,7 @@ type Loop struct {
 	maxIterations int
 	maxToolCalls  int
 	workspace        string
+	dataDir          string // global workspace root for team workspace resolution
 	workspaceSharing *store.WorkspaceSharingConfig
 
 	// Per-agent overrides from DB (nil = use global defaults)
@@ -90,6 +91,9 @@ type Loop struct {
 	sandboxContainerDir    string
 	sandboxWorkspaceAccess string
 
+	// Shell deny group overrides from agent other_config (nil = all defaults)
+	shellDenyGroups map[string]bool
+
 	// Event callback for broadcasting agent events (run.started, chunk, tool.call, etc.)
 	onEvent func(event AgentEvent)
 
@@ -110,8 +114,13 @@ type Loop struct {
 	// Self-evolve: predefined agents can update SOUL.md through chat
 	selfEvolve bool
 
-	// Group writer cache for system prompt injection
-	groupWriterCache *store.GroupWriterCache
+	// Skill learning loop: when skillEvolve=true, the loop injects nudges reminding
+	// the agent to capture reusable patterns as skills via skill_manage.
+	skillEvolve        bool
+	skillNudgeInterval int // nudge every N tool calls (0 = disabled, 15 = default)
+
+	// Config permission store for group file writer checks
+	configPermStore store.ConfigPermissionStore
 
 	// Team store for cross-session pending task detection
 	teamStore store.TeamStore
@@ -160,6 +169,7 @@ type LoopConfig struct {
 	MaxIterations   int
 	MaxToolCalls    int
 	Workspace        string
+	DataDir          string // global workspace root for team workspace resolution
 	WorkspaceSharing *store.WorkspaceSharingConfig
 
 	// Per-agent DB overrides (nil = use global defaults)
@@ -193,6 +203,9 @@ type LoopConfig struct {
 	SandboxContainerDir    string // e.g. "/workspace"
 	SandboxWorkspaceAccess string // "none", "ro", "rw"
 
+	// Shell deny group overrides (nil = all defaults)
+	ShellDenyGroups map[string]bool
+
 	// Agent UUID for context propagation to tools
 	AgentUUID uuid.UUID
 	AgentType string // "open" or "predefined"
@@ -219,8 +232,12 @@ type LoopConfig struct {
 	// Self-evolve: predefined agents can update SOUL.md (style/tone) through chat
 	SelfEvolve bool
 
-	// Group writer cache for system prompt injection
-	GroupWriterCache *store.GroupWriterCache
+	// Skill evolution: agent learning loop config (from other_config JSONB)
+	SkillEvolve        bool
+	SkillNudgeInterval int // 0 = disabled, 15 = default
+
+	// Config permission store for group file writer checks
+	ConfigPermStore store.ConfigPermissionStore
 
 	// Team store for cross-session pending task detection
 	TeamStore store.TeamStore
@@ -239,7 +256,7 @@ type LoopConfig struct {
 	TracingStore       store.TracingStore
 }
 
-const defaultMaxTokens = 8192
+const defaultMaxTokens = config.DefaultMaxTokens
 
 // effectiveMaxTokens returns the configured max output tokens, defaulting to 8192.
 func (l *Loop) effectiveMaxTokens() int {
@@ -251,10 +268,10 @@ func (l *Loop) effectiveMaxTokens() int {
 
 func NewLoop(cfg LoopConfig) *Loop {
 	if cfg.MaxIterations <= 0 {
-		cfg.MaxIterations = 20
+		cfg.MaxIterations = config.DefaultMaxIterations
 	}
 	if cfg.ContextWindow <= 0 {
-		cfg.ContextWindow = 200000
+		cfg.ContextWindow = config.DefaultContextWindow
 	}
 
 	// Normalize injection action (default: "warn")
@@ -283,6 +300,7 @@ func NewLoop(cfg LoopConfig) *Loop {
 		maxIterations:          cfg.MaxIterations,
 		maxToolCalls:           cfg.MaxToolCalls,
 		workspace:              cfg.Workspace,
+		dataDir:                cfg.DataDir,
 		workspaceSharing:       cfg.WorkspaceSharing,
 		restrictToWs:           cfg.RestrictToWs,
 		subagentsCfg:           cfg.SubagentsCfg,
@@ -307,6 +325,7 @@ func NewLoop(cfg LoopConfig) *Loop {
 		sandboxEnabled:         cfg.SandboxEnabled,
 		sandboxContainerDir:    cfg.SandboxContainerDir,
 		sandboxWorkspaceAccess: cfg.SandboxWorkspaceAccess,
+		shellDenyGroups:        cfg.ShellDenyGroups,
 		traceCollector:         cfg.TraceCollector,
 		inputGuard:             guard,
 		injectionAction:        action,
@@ -314,7 +333,9 @@ func NewLoop(cfg LoopConfig) *Loop {
 		builtinToolSettings:    cfg.BuiltinToolSettings,
 		thinkingLevel:          cfg.ThinkingLevel,
 		selfEvolve:             cfg.SelfEvolve,
-		groupWriterCache:       cfg.GroupWriterCache,
+		skillEvolve:            cfg.SkillEvolve,
+		skillNudgeInterval:     cfg.SkillNudgeInterval,
+		configPermStore:        cfg.ConfigPermStore,
 		teamStore:              cfg.TeamStore,
 		secureCLIStore:         cfg.SecureCLIStore,
 		mediaStore:             cfg.MediaStore,
@@ -349,6 +370,8 @@ type RunRequest struct {
 	TraceName         string          // override trace name (default: "chat <agentID>")
 	TraceTags         []string        // additional tags for the trace (e.g. "cron")
 	MaxIterations     int             // per-request override (0 = use agent default, must be lower)
+	ModelOverride     string          // per-request model override (heartbeat uses cheaper model)
+	LightContext      bool            // skip loading context files (only inject ExtraSystemPrompt)
 
 	// Run classification
 	RunKind       string // "delegation", "announce" — empty for user-initiated runs

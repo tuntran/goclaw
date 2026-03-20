@@ -85,7 +85,9 @@ func buildTeamMD(team *store.TeamData, members []store.TeamMemberData, selfID uu
 			sb.WriteString("- Always specify `assignee` — match member expertise from the list above\n")
 			sb.WriteString("- **Check task board first** — ALWAYS call `team_tasks(action=\"list\")` before creating tasks. The system blocks creation if you skip this step\n")
 			sb.WriteString("- Create all tasks first, then briefly tell the user what you delegated\n")
-			sb.WriteString("- Do NOT add confirmations (\"Done!\", \"Got it!\") — just state what was assigned\n")
+			sb.WriteString("- Do NOT say \"done\", \"xong\", \"finished\", or any completion language after delegating — delegation is NOT completion. Only report completion when ALL task results have been delivered to the user\n")
+			sb.WriteString("- Do NOT phrase delegation as a question or request (\"nha?\", \"nhé?\", \"okay?\"). State it declaratively: \"Đã giao X cho Y\" not \"Để em giao cho Y nha anh\"\n")
+			sb.WriteString("- After creating tasks, briefly announce what was delegated and to whom — then STOP. Do not add filler, confirmations, or closing remarks\n")
 			sb.WriteString("- Results arrive automatically — do NOT present partial results\n")
 			sb.WriteString("- **Prefer delegation** — if the user asks to involve the team, delegate tasks immediately. Do NOT do the work yourself first then hand off to members\n")
 			sb.WriteString("- **Do NOT block on completed tasks** — if a dependency task is already done, pass its result in the new task's description instead of using blocked_by\n")
@@ -113,7 +115,6 @@ func buildTeamMD(team *store.TeamData, members []store.TeamMemberData, selfID uu
 			sb.WriteString("The system auto-dispatches blocked tasks when their dependencies complete.\n")
 			sb.WriteString("Do NOT wait for results to create follow-up tasks — plan the full pipeline ahead.\n\n")
 			sb.WriteString("After results: present to user (if done) or continue orchestrating.\n")
-			sb.WriteString("Vary announcement phrasing between delegation rounds.\n")
 
 			sb.WriteString("\n## Follow-up Reminders\n\n")
 			sb.WriteString("When you need user input/decision: create+claim task, then `ask_user` with text=<question>. ONLY use when you have a question for the user — NOT for waiting on teammates or status updates.\n")
@@ -125,7 +126,8 @@ func buildTeamMD(team *store.TeamData, members []store.TeamMemberData, selfID uu
 			sb.WriteString("Rules:\n")
 			sb.WriteString("- Always specify `assignee` when creating tasks\n")
 			sb.WriteString("- Create all tasks first, then briefly tell the user what you delegated\n")
-			sb.WriteString("- Do NOT add confirmations (\"Done!\", \"Got it!\") — just state what was assigned\n")
+			sb.WriteString("- Do NOT say \"done\", \"xong\", \"finished\", or any completion language after delegating — delegation is NOT completion\n")
+			sb.WriteString("- Do NOT phrase delegation as a question or request (\"nha?\", \"nhé?\", \"okay?\"). State it declaratively\n")
 			sb.WriteString("- Results arrive automatically — do NOT present partial results\n")
 		}
 
@@ -134,8 +136,13 @@ func buildTeamMD(team *store.TeamData, members []store.TeamMemberData, selfID uu
 		if selfRole == store.TeamRoleReviewer {
 			sb.WriteString("You are a **reviewer**. When evaluating, respond with **APPROVED** or **REJECTED: <feedback>**.\n\n")
 		}
-		sb.WriteString("As a member, just do the assigned work. Task completion is automatic.\n")
-		sb.WriteString("For long-running tasks, use `team_tasks(action=\"progress\", percent=50, text=\"status update\")` to report progress. The task_id is auto-resolved from your assigned task — you don't need to specify it.\n")
+		sb.WriteString("As a member, focus entirely on your assigned task.\n\n")
+		sb.WriteString("Rules:\n")
+		sb.WriteString("- Stay on task — do not deviate from the assignment\n")
+		sb.WriteString("- Your final response becomes the task result — make it clear, complete, and actionable\n")
+		sb.WriteString("- For long tasks, report progress: `team_tasks(action=\"progress\", percent=50, text=\"status\")`\n")
+		sb.WriteString("- The task_id is auto-resolved — you don't need to specify it\n")
+		sb.WriteString("- Task completion is automatic when your run finishes\n")
 	}
 
 	return sb.String()
@@ -175,9 +182,10 @@ func agentToolPolicyWithMCP(policy *config.ToolPolicySpec, hasMCP bool) *config.
 	return policy
 }
 
-// agentToolPolicyWithWorkspace injects workspace_write and workspace_read into
-// alsoAllow when the agent belongs to a team, ensuring the PolicyEngine doesn't
-// block them even if the agent has a restrictive allow list.
+// agentToolPolicyWithWorkspace injects file tools into alsoAllow when the agent
+// belongs to a team, ensuring the PolicyEngine doesn't block them even if the
+// agent has a restrictive allow list. File tools are now workspace-aware via
+// WorkspaceInterceptor, so no separate workspace_write/workspace_read needed.
 func agentToolPolicyWithWorkspace(policy *config.ToolPolicySpec, hasTeam bool) *config.ToolPolicySpec {
 	if !hasTeam {
 		return policy
@@ -185,7 +193,7 @@ func agentToolPolicyWithWorkspace(policy *config.ToolPolicySpec, hasTeam bool) *
 	if policy == nil {
 		policy = &config.ToolPolicySpec{}
 	}
-	for _, tool := range []string{"workspace_write", "workspace_read"} {
+	for _, tool := range []string{"read_file", "write_file", "list_files"} {
 		if !slices.Contains(policy.AlsoAllow, tool) {
 			policy.AlsoAllow = append(policy.AlsoAllow, tool)
 		}

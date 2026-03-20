@@ -54,7 +54,7 @@ func (t *TeamTasksTool) Parameters() map[string]any {
 			},
 			"status": map[string]any{
 				"type":        "string",
-				"description": "Filter for list: '' (active, default), 'completed', 'all'",
+				"description": "Filter for list: '' (all, default), 'active', 'completed', 'in_review'",
 			},
 			"query": map[string]any{
 				"type":        "string",
@@ -74,8 +74,8 @@ func (t *TeamTasksTool) Parameters() map[string]any {
 				"description": "Require user approval before claim (for create, default false)",
 			},
 			"percent": map[string]any{
-				"type":        "number",
-				"description": "Progress 0-100 (for progress)",
+				"type":        "integer",
+				"description": "Progress percentage 0-100 (for progress action)",
 			},
 			"file_id": map[string]any{
 				"type":        "string",
@@ -87,7 +87,7 @@ func (t *TeamTasksTool) Parameters() map[string]any {
 			},
 			"page": map[string]any{
 				"type":        "number",
-				"description": "Page number for list/search (default 1, 50 per page)",
+				"description": "Page number for list/search (default 1, 30 per page)",
 			},
 		},
 		"required": []string{"action"},

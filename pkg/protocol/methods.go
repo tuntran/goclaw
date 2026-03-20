@@ -83,6 +83,25 @@ const (
 	MethodSend = "send"
 )
 
+// Agent heartbeat
+const (
+	MethodHeartbeatGet          = "heartbeat.get"
+	MethodHeartbeatSet          = "heartbeat.set"
+	MethodHeartbeatToggle       = "heartbeat.toggle"
+	MethodHeartbeatTest         = "heartbeat.test"
+	MethodHeartbeatLogs         = "heartbeat.logs"
+	MethodHeartbeatChecklistGet = "heartbeat.checklist.get"
+	MethodHeartbeatChecklistSet = "heartbeat.checklist.set"
+	MethodHeartbeatTargets      = "heartbeat.targets"
+)
+
+// Config permissions
+const (
+	MethodConfigPermissionsList   = "config.permissions.list"
+	MethodConfigPermissionsGrant  = "config.permissions.grant"
+	MethodConfigPermissionsRevoke = "config.permissions.revoke"
+)
+
 // Channel instances management
 const (
 	MethodChannelInstancesList   = "channels.instances.list"
@@ -108,14 +127,16 @@ const (
 	MethodTeamsDelete   = "teams.delete"
 	MethodTeamsTaskList      = "teams.tasks.list"
 	MethodTeamsTaskGet       = "teams.tasks.get"
+	MethodTeamsTaskGetLight  = "teams.tasks.get-light"
 	MethodTeamsTaskApprove   = "teams.tasks.approve"
 	MethodTeamsTaskReject    = "teams.tasks.reject"
 	MethodTeamsTaskComment   = "teams.tasks.comment"
 	MethodTeamsTaskComments  = "teams.tasks.comments"
 	MethodTeamsTaskEvents    = "teams.tasks.events"
 	MethodTeamsTaskCreate    = "teams.tasks.create"
-	MethodTeamsTaskDelete    = "teams.tasks.delete"
-	MethodTeamsTaskAssign    = "teams.tasks.assign"
+	MethodTeamsTaskDelete     = "teams.tasks.delete"
+	MethodTeamsTaskDeleteBulk = "teams.tasks.delete-bulk"
+	MethodTeamsTaskAssign     = "teams.tasks.assign"
 	MethodTeamsMembersAdd    = "teams.members.add"
 	MethodTeamsMembersRemove = "teams.members.remove"
 	MethodTeamsUpdate        = "teams.update"

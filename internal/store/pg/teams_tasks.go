@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/google/uuid"
 	"github.com/lib/pq"
@@ -32,7 +33,7 @@ const taskJoinClause = `FROM team_tasks t
 		 LEFT JOIN agents ca ON ca.id = t.created_by_agent_id`
 
 // maxListTasksRows caps ListTasks results to prevent unbounded queries.
-const maxListTasksRows = 50
+const maxListTasksRows = 30
 
 // ============================================================
 // Scopes
@@ -89,10 +90,11 @@ func (s *PGTeamStore) CreateTask(ctx context.Context, task *store.TeamTaskData) 
 		return fmt.Errorf("lock team: %w", err)
 	}
 
+	// Scope task_number per (team_id, chat_id) so each conversation starts from 1.
 	var taskNumber int
 	err = tx.QueryRowContext(ctx,
-		`SELECT COALESCE(MAX(task_number), 0) + 1 FROM team_tasks WHERE team_id = $1`,
-		task.TeamID,
+		`SELECT COALESCE(MAX(task_number), 0) + 1 FROM team_tasks WHERE team_id = $1 AND COALESCE(chat_id, '') = $2`,
+		task.TeamID, task.ChatID,
 	).Scan(&taskNumber)
 	if err != nil {
 		return fmt.Errorf("compute task_number: %w", err)
@@ -163,20 +165,25 @@ func (s *PGTeamStore) UpdateTask(ctx context.Context, taskID uuid.UUID, updates 
 	return execMapUpdate(ctx, s.db, "team_tasks", taskID, updates)
 }
 
-func (s *PGTeamStore) ListTasks(ctx context.Context, teamID uuid.UUID, orderBy string, statusFilter string, userID string, channel string, chatID string, offset int) ([]store.TeamTaskData, error) {
+func (s *PGTeamStore) ListTasks(ctx context.Context, teamID uuid.UUID, orderBy string, statusFilter string, userID string, channel string, chatID string, limit int, offset int) ([]store.TeamTaskData, error) {
 	orderClause := "t.priority DESC, t.created_at"
 	if orderBy == "newest" {
 		orderClause = "t.created_at DESC"
 	}
 
-	statusWhere := "AND t.status NOT IN ('completed','cancelled')" // default: active only
+	statusWhere := "" // default: all statuses (no filter)
 	switch statusFilter {
-	case store.TeamTaskFilterAll:
-		statusWhere = ""
+	case store.TeamTaskFilterActive:
+		statusWhere = "AND t.status NOT IN ('completed','cancelled')"
 	case store.TeamTaskFilterInReview:
 		statusWhere = "AND t.status = 'in_review'"
 	case store.TeamTaskFilterCompleted:
 		statusWhere = "AND t.status IN ('completed','cancelled')"
+	// "", store.TeamTaskFilterAll ("all") → no filter (all statuses)
+	}
+
+	if limit <= 0 {
+		limit = maxListTasksRows
 	}
 
 	// Scope filter: always bind $4/$5 but only enforce when non-empty.
@@ -187,7 +194,7 @@ func (s *PGTeamStore) ListTasks(ctx context.Context, teamID uuid.UUID, orderBy s
 		 `+taskJoinClause+`
 		 WHERE t.team_id = $1 AND ($2 = '' OR t.user_id = $2) `+statusWhere+` `+scopeWhere+`
 		 ORDER BY `+orderClause+`
-		 LIMIT $3 OFFSET $6`, teamID, userID, maxListTasksRows+1, channel, chatID, offset)
+		 LIMIT $3 OFFSET $6`, teamID, userID, limit+1, channel, chatID, offset)
 	if err != nil {
 		return nil, err
 	}
@@ -233,12 +240,35 @@ func (s *PGTeamStore) SearchTasks(ctx context.Context, teamID uuid.UUID, query s
 	if limit <= 0 {
 		limit = 20
 	}
+	// Split query into words and join with OR for broader matching
+	words := strings.Fields(query)
+	if len(words) == 0 {
+		return nil, nil
+	}
+	var sanitized []string
+	for _, w := range words {
+		w = strings.Map(func(r rune) rune {
+			if unicode.IsLetter(r) || unicode.IsDigit(r) || r == '-' || r == '_' {
+				return r
+			}
+			return -1
+		}, w)
+		w = strings.TrimSpace(w)
+		if w != "" {
+			sanitized = append(sanitized, w)
+		}
+	}
+	if len(sanitized) == 0 {
+		return nil, nil
+	}
+	tsq := strings.Join(sanitized, " | ")
+
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT `+taskSelectCols+`
 		 `+taskJoinClause+`
-		 WHERE t.team_id = $1 AND t.tsv @@ plainto_tsquery('simple', $2) AND ($4 = '' OR t.user_id = $4)
-		 ORDER BY ts_rank(t.tsv, plainto_tsquery('simple', $2)) DESC
-		 LIMIT $3`, teamID, query, limit, userID)
+		 WHERE t.team_id = $1 AND t.tsv @@ to_tsquery('simple', $2) AND ($4 = '' OR t.user_id = $4)
+		 ORDER BY ts_rank(t.tsv, to_tsquery('simple', $2)) DESC
+		 LIMIT $3`, teamID, tsq, limit, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -258,6 +288,30 @@ func (s *PGTeamStore) DeleteTask(ctx context.Context, taskID, teamID uuid.UUID) 
 		return store.ErrTaskNotFound
 	}
 	return nil
+}
+
+func (s *PGTeamStore) DeleteTasks(ctx context.Context, taskIDs []uuid.UUID, teamID uuid.UUID) ([]uuid.UUID, error) {
+	if len(taskIDs) == 0 {
+		return nil, nil
+	}
+	rows, err := s.db.QueryContext(ctx,
+		`DELETE FROM team_tasks
+		 WHERE id = ANY($1) AND team_id = $2 AND status IN ('completed','failed','cancelled')
+		 RETURNING id`,
+		taskIDs, teamID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var deleted []uuid.UUID
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return deleted, err
+		}
+		deleted = append(deleted, id)
+	}
+	return deleted, rows.Err()
 }
 
 func scanTaskRowsJoined(rows *sql.Rows) ([]store.TeamTaskData, error) {

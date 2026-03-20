@@ -19,10 +19,13 @@ import (
 )
 
 // InternalChannels are system channels excluded from outbound dispatch.
+// "browser" uses WebSocket directly — no outbound channel routing needed.
 var InternalChannels = map[string]bool{
 	"cli":      true,
 	"system":   true,
 	"subagent": true,
+	"browser":  true,
+	"ws":       true, // WebSocket — responses delivered via events/RPC, not outbound dispatch
 }
 
 // IsInternalChannel checks if a channel name is internal.
@@ -327,6 +330,17 @@ func (c *BaseChannel) HandleMessage(senderID, chatID, content string, media []st
 	}
 
 	c.bus.PublishInbound(msg)
+}
+
+// GroupMember represents a member of a group chat.
+type GroupMember struct {
+	MemberID string `json:"member_id"`
+	Name     string `json:"name"`
+}
+
+// GroupMemberProvider is optionally implemented by channels that can list group members.
+type GroupMemberProvider interface {
+	ListGroupMembers(ctx context.Context, chatID string) ([]GroupMember, error)
 }
 
 // PendingCompactable is optionally implemented by channels that have a PendingHistory

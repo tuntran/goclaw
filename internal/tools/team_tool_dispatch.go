@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -67,7 +68,16 @@ func (m *TeamToolManager) dispatchTaskToAgent(ctx context.Context, task *store.T
 	}
 	// Hint: tell the agent it's on a team task and where the shared workspace is.
 	if ws := taskTeamWorkspace(task); ws != "" {
-		content += fmt.Sprintf("\n\n[Team workspace: %s — all files you create will be saved here, accessible by the team lead and other members via workspace_read.]", ws)
+		content += fmt.Sprintf("\n\n[Team workspace: %s — use read_file/write_file/list_files to access shared files. All files you write are visible to the team lead and other members.]", ws)
+	}
+	// List attached files so member knows what's available to read.
+	if files, ok := task.Metadata["attached_files"].([]any); ok && len(files) > 0 {
+		content += "\n\n[Attached files in team workspace — use read_file to access:]"
+		for _, f := range files {
+			if path, ok := f.(string); ok {
+				content += "\n- attachments/" + filepath.Base(path)
+			}
+		}
 	}
 
 	// Use task's stored channel/chat as primary source for routing.
@@ -110,10 +120,11 @@ func (m *TeamToolManager) dispatchTaskToAgent(ctx context.Context, task *store.T
 		"origin_peer_kind": originPeerKind,
 		"origin_chat_id":   originChatID,
 		"origin_user_id":   originUserID,
-		"from_agent":       fromAgent,
-		"to_agent":         ag.AgentKey,
-		"team_task_id":     task.ID.String(),
-		"team_id":          teamID.String(),
+		"from_agent":          fromAgent,
+		"to_agent":            ag.AgentKey,
+		"to_agent_display":    ag.DisplayName,
+		"team_task_id":        task.ID.String(),
+		"team_id":             teamID.String(),
 	}
 	// Resolve local key from context; fallback to task metadata for deferred dispatches.
 	localKey := ToolLocalKeyFromCtx(ctx)
@@ -124,6 +135,17 @@ func (m *TeamToolManager) dispatchTaskToAgent(ctx context.Context, task *store.T
 	}
 	if localKey != "" {
 		meta["origin_local_key"] = localKey
+	}
+	// Resolve origin session key from context; fallback to task metadata for deferred dispatches.
+	// WS sessions use non-standard key format that BuildScopedSessionKey() cannot reproduce.
+	originSessionKey := ToolSessionKeyFromCtx(ctx)
+	if originSessionKey == "" {
+		if sk, ok := task.Metadata["origin_session_key"].(string); ok {
+			originSessionKey = sk
+		}
+	}
+	if originSessionKey != "" {
+		meta["origin_session_key"] = originSessionKey
 	}
 	// Pass the team workspace dir so member agents write files to the shared folder.
 	if ws := taskTeamWorkspace(task); ws != "" {
@@ -234,11 +256,15 @@ func (m *TeamToolManager) DispatchUnblockedTasks(ctx context.Context, teamID uui
 				slog.Warn("DispatchUnblockedTasks: assign failed", "task_id", task.ID, "error", err)
 				continue
 			}
-			m.broadcastTeamEvent(protocol.EventTeamTaskAssigned, protocol.TeamTaskEventPayload{
+			m.broadcastTeamEvent(protocol.EventTeamTaskDispatched, protocol.TeamTaskEventPayload{
 				TeamID:        teamID.String(),
 				TaskID:        task.ID.String(),
+				TaskNumber:    task.TaskNumber,
+				Subject:       task.Subject,
 				Status:        store.TeamTaskStatusInProgress,
 				OwnerAgentKey: m.agentKeyFromID(ctx, *task.OwnerAgentID),
+				Channel:       task.Channel,
+				ChatID:        task.ChatID,
 				Timestamp:     time.Now().UTC().Format("2006-01-02T15:04:05Z"),
 				ActorType:     "system",
 				ActorID:       "dispatch_unblocked",

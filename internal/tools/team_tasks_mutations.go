@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -24,7 +25,7 @@ func (t *TeamTasksTool) executeCreate(ctx context.Context, args map[string]any) 
 
 	// Gate: must list tasks before creating to prevent duplicates in concurrent group chat.
 	if ptd := PendingTeamDispatchFromCtx(ctx); ptd != nil && !ptd.HasListed() {
-		return ErrorResult("You must check existing tasks first. Call team_tasks(action=\"list\") to review the current task board before creating new tasks — this prevents duplicates in concurrent sessions.")
+		return ErrorResult("You must check existing tasks first. Call team_tasks(action=\"search\", query=\"<keywords>\") to check for similar tasks before creating — this saves tokens vs listing all. Alternatively use action=\"list\" to see the full board.")
 	}
 
 	subject, _ := args["subject"].(string)
@@ -107,13 +108,44 @@ func (t *TeamTasksTool) executeCreate(ctx context.Context, args map[string]any) 
 
 	chatID := ToolChatIDFromCtx(ctx)
 
+	// Shared workspace: scope by teamID only. Isolated (default): scope by chatID too.
+	wsChat := chatID
+	if IsSharedWorkspace(team.Settings) {
+		wsChat = ""
+	}
+
 	// Compute the team workspace directory so member agents write files to the
-	// shared team folder (teams/{teamID}/{chatID}/) instead of their own personal workspace.
-	// This aligns write_file/create_image with workspace_read/workspace_write paths.
+	// shared team folder instead of their own personal workspace.
 	taskMeta := make(map[string]any)
-	if teamWsDir, err := workspaceDir(t.manager.dataDir, team.ID, "", chatID); err == nil {
+	if teamWsDir, err := WorkspaceDir(t.manager.dataDir, team.ID, wsChat); err == nil {
 		taskMeta["team_workspace"] = teamWsDir
 	}
+	// Auto-collect media files from current run to team workspace.
+	// When leader received files from user and creates a task, copy those
+	// files to the team workspace so members can access them via read_file.
+	// Also rewrite any media paths in the description to point to the workspace copy,
+	// since members can't access the original .media/ paths outside their workspace.
+	if mediaPaths := RunMediaPathsFromCtx(ctx); len(mediaPaths) > 0 {
+		if wsDir, _ := taskMeta["team_workspace"].(string); wsDir != "" {
+			nameMap := RunMediaNamesFromCtx(ctx)
+			if copiedPaths := copyMediaToWorkspace(mediaPaths, wsDir, nameMap); len(copiedPaths) > 0 {
+				// Store as []any so type assertion works both before and after JSON round-trip.
+				files := make([]any, len(copiedPaths))
+				for i, p := range copiedPaths {
+					files[i] = p
+				}
+				taskMeta["attached_files"] = files
+
+				// Rewrite media paths in description so members see workspace paths.
+				for i, src := range mediaPaths {
+					if i < len(copiedPaths) {
+						description = strings.ReplaceAll(description, src, copiedPaths[i])
+					}
+				}
+			}
+		}
+	}
+
 	// Preserve original blocked_by list for blocker-result forwarding when task unblocks.
 	if len(blockedBy) > 0 {
 		ids := make([]string, len(blockedBy))
@@ -129,6 +161,11 @@ func (t *TeamTasksTool) executeCreate(ctx context.Context, args map[string]any) 
 	// Store local key so forum-topic routing works on deferred/unblocked dispatches.
 	if lk := ToolLocalKeyFromCtx(ctx); lk != "" {
 		taskMeta["local_key"] = lk
+	}
+	// Store origin session key so deferred dispatches route announces correctly.
+	// WS sessions use non-standard key format that BuildScopedSessionKey() cannot reproduce.
+	if sk := ToolSessionKeyFromCtx(ctx); sk != "" {
+		taskMeta["origin_session_key"] = sk
 	}
 	// Store leader's trace context so unblocked dispatch links back to the leader's trace.
 	if traceID := tracing.TraceIDFromContext(ctx); traceID != uuid.Nil {
@@ -171,19 +208,6 @@ func (t *TeamTasksTool) executeCreate(ctx context.Context, args map[string]any) 
 		ActorType: "agent",
 		ActorID:   agentKey,
 	})
-	t.manager.broadcastTeamEvent(protocol.EventTeamTaskAssigned, protocol.TeamTaskEventPayload{
-		TeamID:        team.ID.String(),
-		TaskID:        task.ID.String(),
-		Status:        status,
-		OwnerAgentKey: t.manager.agentKeyFromID(ctx, assigneeID),
-		UserID:        store.UserIDFromContext(ctx),
-		Channel:       ToolChannelFromCtx(ctx),
-		ChatID:        chatID,
-		Timestamp:     task.CreatedAt.UTC().Format("2006-01-02T15:04:05Z"),
-		ActorType:     "agent",
-		ActorID:       agentKey,
-	})
-
 	// Track for post-turn dispatch. If no post-turn hook (e.g. HTTP API), dispatch immediately.
 	if status == store.TeamTaskStatusPending {
 		if ptd := PendingTeamDispatchFromCtx(ctx); ptd != nil {
@@ -193,11 +217,15 @@ func (t *TeamTasksTool) executeCreate(ctx context.Context, args map[string]any) 
 			if err := t.manager.teamStore.AssignTask(ctx, task.ID, assigneeID, team.ID); err != nil {
 				slog.Warn("executeCreate: fallback assign failed", "task_id", task.ID, "error", err)
 			} else {
-				t.manager.broadcastTeamEvent(protocol.EventTeamTaskAssigned, protocol.TeamTaskEventPayload{
+				t.manager.broadcastTeamEvent(protocol.EventTeamTaskDispatched, protocol.TeamTaskEventPayload{
 					TeamID:        team.ID.String(),
 					TaskID:        task.ID.String(),
+					TaskNumber:    task.TaskNumber,
+					Subject:       task.Subject,
 					Status:        store.TeamTaskStatusInProgress,
 					OwnerAgentKey: t.manager.agentKeyFromID(ctx, assigneeID),
+					Channel:       task.Channel,
+					ChatID:        task.ChatID,
 					Timestamp:     time.Now().UTC().Format("2006-01-02T15:04:05Z"),
 					ActorType:     "system",
 					ActorID:       "fallback_dispatch",
@@ -207,7 +235,11 @@ func (t *TeamTasksTool) executeCreate(ctx context.Context, args map[string]any) 
 		}
 	}
 
-	return NewResult(fmt.Sprintf("Task created: %s (id=%s, identifier=%s, status=%s)", subject, task.ID, task.Identifier, status))
+	assigneeName := t.manager.agentDisplayName(ctx, t.manager.agentKeyFromID(ctx, assigneeID))
+	if assigneeName == "" {
+		assigneeName = t.manager.agentKeyFromID(ctx, assigneeID)
+	}
+	return NewResult(fmt.Sprintf("Task created: %s (id=%s, task_number=%d, status=%s, assignee=%s)", subject, task.ID, task.TaskNumber, status, assigneeName))
 }
 
 func (t *TeamTasksTool) executeComment(ctx context.Context, args map[string]any) *Result {
@@ -290,18 +322,32 @@ func (t *TeamTasksTool) executeProgress(ctx context.Context, args map[string]any
 		return ErrorResult("only the assigned task owner can update progress. As team lead, task results arrive automatically when members complete their work.")
 	}
 
+	// Prevent progress regression — keep the higher value.
+	if percent < task.ProgressPercent {
+		percent = task.ProgressPercent
+	}
+
 	if err := t.manager.teamStore.UpdateTaskProgress(ctx, taskID, team.ID, percent, step); err != nil {
 		return ErrorResult("failed to update progress: " + err.Error())
 	}
 
+	ownerKey := ""
+	if task.OwnerAgentID != nil {
+		ownerKey = t.manager.agentKeyFromID(ctx, *task.OwnerAgentID)
+	}
 	t.manager.broadcastTeamEvent(protocol.EventTeamTaskProgress, protocol.TeamTaskEventPayload{
-		TeamID:    team.ID.String(),
-		TaskID:    taskID.String(),
-		Status:    store.TeamTaskStatusInProgress,
-		UserID:    store.UserIDFromContext(ctx),
-		Channel:   ToolChannelFromCtx(ctx),
-		ChatID:    ToolChatIDFromCtx(ctx),
-		Timestamp: time.Now().UTC().Format("2006-01-02T15:04:05Z"),
+		TeamID:          team.ID.String(),
+		TaskID:          taskID.String(),
+		TaskNumber:      task.TaskNumber,
+		Subject:         task.Subject,
+		Status:          store.TeamTaskStatusInProgress,
+		OwnerAgentKey:   ownerKey,
+		ProgressPercent: percent,
+		ProgressStep:    step,
+		UserID:          store.UserIDFromContext(ctx),
+		Channel:         ToolChannelFromCtx(ctx),
+		ChatID:          ToolChatIDFromCtx(ctx),
+		Timestamp:       time.Now().UTC().Format("2006-01-02T15:04:05Z"),
 	})
 
 	return SilentResult(fmt.Sprintf("Progress updated: %d%% %s", percent, step))

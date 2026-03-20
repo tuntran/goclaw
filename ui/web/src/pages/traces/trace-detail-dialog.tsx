@@ -135,7 +135,7 @@ export function TraceDetailDialog({ traceId, onClose, getTrace, onNavigateTrace 
 
   return (
     <Dialog open onOpenChange={() => onClose()}>
-      <DialogContent className="max-h-[85vh] w-[95vw] overflow-y-auto sm:max-w-6xl">
+      <DialogContent className="max-h-[85vh] w-[95vw] flex flex-col sm:max-w-6xl">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2 pr-8">
             {t("detail.title")}
@@ -163,6 +163,7 @@ export function TraceDetailDialog({ traceId, onClose, getTrace, onNavigateTrace 
           </DialogTitle>
         </DialogHeader>
 
+        <div className="overflow-y-auto min-h-0 -mx-4 px-4 sm:-mx-6 sm:px-6">
         {loading && !trace ? (
           <div className="flex items-center justify-center py-12">
             <div className="h-6 w-6 animate-spin rounded-full border-2 border-muted-foreground border-t-transparent" />
@@ -253,6 +254,7 @@ export function TraceDetailDialog({ traceId, onClose, getTrace, onNavigateTrace 
             )}
           </div>
         )}
+        </div>
       </DialogContent>
     </Dialog>
   );

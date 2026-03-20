@@ -34,7 +34,7 @@ const (
 const (
 	ChannelSystem    = "system"
 	ChannelDashboard = "dashboard"
-	ChannelDelegate  = "delegate"
+	ChannelTeammate  = "teammate"
 )
 
 // MediaPathLoader resolves a media ID to a local file path.
@@ -194,6 +194,21 @@ func ParentModelFromCtx(ctx context.Context) string {
 	return v
 }
 
+// --- Parent agent provider (for subagent inheritance) ---
+
+const ctxParentProvider toolContextKey = "tool_parent_provider"
+
+// WithParentProvider sets the parent agent's provider name in context so subagents inherit it.
+func WithParentProvider(ctx context.Context, providerName string) context.Context {
+	return context.WithValue(ctx, ctxParentProvider, providerName)
+}
+
+// ParentProviderFromCtx returns the parent agent's provider name from context.
+func ParentProviderFromCtx(ctx context.Context) string {
+	v, _ := ctx.Value(ctxParentProvider).(string)
+	return v
+}
+
 // --- Per-agent subagent config override ---
 
 const ctxSubagentCfg toolContextKey = "tool_subagent_config"
@@ -224,8 +239,8 @@ func MemoryConfigFromCtx(ctx context.Context) *config.MemoryConfig {
 
 const ctxTeamID toolContextKey = "tool_team_id"
 
-// WithToolTeamID injects the dispatching team's ID into context so workspace
-// tools (workspace_read, workspace_write, team_tasks, team_message) resolve
+// WithToolTeamID injects the dispatching team's ID into context so team
+// tools (team_tasks, team_message) and the WorkspaceInterceptor resolve
 // the correct team when the agent belongs to multiple teams.
 func WithToolTeamID(ctx context.Context, teamID string) context.Context {
 	return context.WithValue(ctx, ctxTeamID, teamID)
@@ -234,6 +249,22 @@ func WithToolTeamID(ctx context.Context, teamID string) context.Context {
 // ToolTeamIDFromCtx returns the dispatching team's ID from context.
 func ToolTeamIDFromCtx(ctx context.Context) string {
 	v, _ := ctx.Value(ctxTeamID).(string)
+	return v
+}
+
+// --- Team workspace path (accessible but not default) ---
+
+const ctxTeamWorkspace toolContextKey = "tool_team_workspace"
+
+// WithToolTeamWorkspace stores the team shared workspace directory path.
+// File tools allow access to this path even when restrict_to_workspace is true.
+func WithToolTeamWorkspace(ctx context.Context, dir string) context.Context {
+	return context.WithValue(ctx, ctxTeamWorkspace, dir)
+}
+
+// ToolTeamWorkspaceFromCtx returns the team shared workspace directory path.
+func ToolTeamWorkspaceFromCtx(ctx context.Context) string {
+	v, _ := ctx.Value(ctxTeamWorkspace).(string)
 	return v
 }
 
@@ -349,6 +380,35 @@ func WithPendingTeamDispatch(ctx context.Context, ptd *PendingTeamDispatch) cont
 
 func PendingTeamDispatchFromCtx(ctx context.Context) *PendingTeamDispatch {
 	v, _ := ctx.Value(ctxPendingDispatch).(*PendingTeamDispatch)
+	return v
+}
+
+// --- Run media file paths (for team workspace auto-collect) ---
+
+const ctxRunMediaPaths toolContextKey = "tool_run_media_paths"
+
+// WithRunMediaPaths stores the absolute file paths of media files received
+// in the current run. Used by team_tasks to auto-copy files to team workspace.
+func WithRunMediaPaths(ctx context.Context, paths []string) context.Context {
+	return context.WithValue(ctx, ctxRunMediaPaths, paths)
+}
+
+// RunMediaPathsFromCtx returns media file paths from the current run.
+func RunMediaPathsFromCtx(ctx context.Context) []string {
+	v, _ := ctx.Value(ctxRunMediaPaths).([]string)
+	return v
+}
+
+const ctxRunMediaNames toolContextKey = "tool_run_media_names"
+
+// WithRunMediaNames stores the mapping from media file path to original filename.
+func WithRunMediaNames(ctx context.Context, names map[string]string) context.Context {
+	return context.WithValue(ctx, ctxRunMediaNames, names)
+}
+
+// RunMediaNamesFromCtx returns the media path → original filename mapping.
+func RunMediaNamesFromCtx(ctx context.Context) map[string]string {
+	v, _ := ctx.Value(ctxRunMediaNames).(map[string]string)
 	return v
 }
 
