@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
-	"strings"
 	"sync"
 
 	"github.com/nextlevelbuilder/goclaw/internal/bus"
@@ -15,9 +14,8 @@ import (
 )
 
 const (
-	defaultWebhookPath    = "/googlechat/events"
-	defaultTextChunkLimit = 4000
-	typingEmoji           = "\u23f3" // Unicode hourglass for thinking indicator
+	defaultWebhookPath = "/googlechat/events"
+	typingEmoji        = "\u23f3" // Unicode hourglass for thinking indicator
 )
 
 // Channel connects to Google Chat via webhook.
@@ -123,20 +121,9 @@ func (c *Channel) Send(ctx context.Context, msg bus.OutboundMessage) error {
 		return nil
 	}
 
-	// Chunk at 4000 chars (Google Chat limit is 4096)
-	for len(text) > 0 {
-		chunk := text
-		if len(chunk) > defaultTextChunkLimit {
-			cutAt := defaultTextChunkLimit
-			if idx := strings.LastIndex(text[:defaultTextChunkLimit], "\n"); idx > defaultTextChunkLimit/2 {
-				cutAt = idx + 1
-			}
-			chunk = text[:cutAt]
-			text = text[cutAt:]
-		} else {
-			text = ""
-		}
-
+	// Convert markdown and chunk by bytes (UTF-8 safe, limit 3900B per chunk).
+	chunks := chunkByBytes(markdownToGoogleChat(text), googleChatMaxMessageBytes)
+	for _, chunk := range chunks {
 		if err := c.client.SendMessage(ctx, msg.ChatID, chunk); err != nil {
 			return fmt.Errorf("googlechat send: %w", err)
 		}

@@ -11,6 +11,8 @@ import (
 
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/google"
+
+	"github.com/nextlevelbuilder/goclaw/internal/providers"
 )
 
 const (
@@ -75,17 +77,35 @@ func (c *ChatClient) doJSON(ctx context.Context, method, url string, body interf
 		return nil, fmt.Errorf("read response body: %w", err)
 	}
 	if resp.StatusCode >= 400 {
-		return nil, fmt.Errorf("google chat api %d: %s", resp.StatusCode, string(respBody))
+		retryAfter := providers.ParseRetryAfter(resp.Header.Get("Retry-After"))
+		return nil, &providers.HTTPError{
+			Status:     resp.StatusCode,
+			Body:       string(respBody),
+			RetryAfter: retryAfter,
+		}
 	}
 	return respBody, nil
 }
 
-// SendMessage sends a text message to a Google Chat space.
+// googleChatSendRetryConfig is used only for SendMessage — not reactions (fire-and-forget).
+// GChat rate limit ~10 msg/s/space → MinDelay 1s instead of 300ms used by LLM providers.
+var googleChatSendRetryConfig = providers.RetryConfig{
+	Attempts: 5,
+	MinDelay: 1 * time.Second,
+	MaxDelay: 30 * time.Second,
+	Jitter:   0.1,
+}
+
+// SendMessage sends a text message to a Google Chat space with retry on 429/5xx.
 // spaceName format: "spaces/SPACE_ID"
+// AddReaction/DeleteReaction are fire-and-forget — they call doJSON directly without retry.
 func (c *ChatClient) SendMessage(ctx context.Context, spaceName, text string) error {
 	url := chatAPIBase + spaceName + "/messages"
 	msg := gcSendMessage{Text: text}
-	_, err := c.doJSON(ctx, "POST", url, msg)
+	// doJSON marshals body fresh each call, so retrying is safe — no consumed reader.
+	_, err := providers.RetryDo[[]byte](ctx, googleChatSendRetryConfig, func() ([]byte, error) {
+		return c.doJSON(ctx, "POST", url, msg)
+	})
 	return err
 }
 
