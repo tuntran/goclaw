@@ -102,6 +102,7 @@ func verifyChatToken(ctx context.Context, token string, audiences []string) erro
 		Iss string `json:"iss"`
 		Aud string `json:"aud"`
 		Exp int64  `json:"exp"`
+		Iat int64  `json:"iat"`
 	}
 	if err := json.Unmarshal(claimsJSON, &claims); err != nil {
 		return fmt.Errorf("parse claims: %w", err)
@@ -111,8 +112,13 @@ func verifyChatToken(ctx context.Context, token string, audiences []string) erro
 		return fmt.Errorf("invalid issuer: %s", claims.Iss)
 	}
 
-	if time.Now().Unix() > claims.Exp+int64(clockSkewLeeway.Seconds()) {
+	now := time.Now().Unix()
+	if now > claims.Exp+int64(clockSkewLeeway.Seconds()) {
 		return fmt.Errorf("token expired")
+	}
+	// Reject tokens issued in the future (clock skew tolerance applied).
+	if claims.Iat > 0 && now < claims.Iat-int64(clockSkewLeeway.Seconds()) {
+		return fmt.Errorf("token not yet valid")
 	}
 
 	for _, aud := range audiences {
