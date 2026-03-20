@@ -70,7 +70,7 @@ func (c *ChatClient) doJSON(ctx context.Context, method, url string, body interf
 	}
 	defer resp.Body.Close()
 
-	respBody, err := io.ReadAll(resp.Body)
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20)) // limit to 1MB
 	if err != nil {
 		return nil, fmt.Errorf("read response body: %w", err)
 	}

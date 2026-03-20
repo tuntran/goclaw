@@ -30,8 +30,8 @@ type GoogleChatConfig struct {
 	ProjectNumber      string              `json:"project_number"`                // for OIDC verification
 	WebhookPath        string              `json:"webhook_path,omitempty"`       // default "/googlechat/events"
 	AllowFrom          FlexibleStringSlice `json:"allow_from"`
-	DMPolicy           string              `json:"dm_policy,omitempty"`          // "open" (default), "allowlist", "disabled"
-	GroupPolicy        string              `json:"group_policy,omitempty"`       // "open" (default), "allowlist", "disabled"
+	DMPolicy           string              `json:"dm_policy,omitempty"`          // "pairing" (default), "allowlist", "open", "disabled"
+	GroupPolicy        string              `json:"group_policy,omitempty"`       // "pairing" (default), "allowlist", "open", "disabled"
 	RequireMention     *bool               `json:"require_mention,omitempty"`    // require @bot in spaces (default true)
 	HistoryLimit       int                 `json:"history_limit,omitempty"`      // pending group messages (default 50)
 	ReactionLevel      string              `json:"reaction_level,omitempty"`     // "off" (default), "minimal", "full"

@@ -60,7 +60,7 @@ func TestExtractSenderInfo_FromMessageSender(t *testing.T) {
 		},
 	}
 	id, name := extractSenderInfo(event)
-	if id != "users/222|MsgSender" {
+	if id != "users/222" {
 		t.Fatalf("unexpected senderID: %s", id)
 	}
 	if name != "MsgSender" {
@@ -74,7 +74,7 @@ func TestExtractSenderInfo_FallbackToEventUser(t *testing.T) {
 		Message: &GCMessage{},
 	}
 	id, name := extractSenderInfo(event)
-	if id != "users/111|EventUser" {
+	if id != "users/111" {
 		t.Fatalf("unexpected senderID: %s", id)
 	}
 	if name != "EventUser" {

@@ -129,7 +129,8 @@ func isBotMentioned(event *SpaceEvent) bool {
 }
 
 // extractSenderInfo returns (senderID, displayName) from the event.
-// senderID uses compound format: "users/123456789|DisplayName"
+// senderID is the stable resource name (e.g. "users/123456789") — display name is excluded
+// to prevent session loss when users rename themselves.
 func extractSenderInfo(event *SpaceEvent) (string, string) {
 	user := event.User
 	if event.Message != nil && event.Message.Sender != nil {
@@ -138,11 +139,5 @@ func extractSenderInfo(event *SpaceEvent) (string, string) {
 	if user == nil {
 		return "", ""
 	}
-
-	displayName := user.DisplayName
-	senderID := user.Name
-	if displayName != "" {
-		senderID = user.Name + "|" + displayName
-	}
-	return senderID, displayName
+	return user.Name, user.DisplayName
 }
